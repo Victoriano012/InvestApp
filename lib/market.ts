@@ -16,6 +16,7 @@ const QUOTE_TTL_MS = 5 * 60 * 1000;
 const HISTORY_TTL_MS = 60 * 60 * 1000;
 
 export const FX_SYMBOL = "EURUSD=X"; // USD per 1 EUR
+export const GBP_FX_SYMBOL = "EURGBP=X"; // GBP per 1 EUR (money-based entry only)
 
 /**
  * Latest quotes for a set of symbols, cached in SQLite with a 5-minute TTL.

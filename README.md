@@ -55,8 +55,9 @@ page. In charts, a basket appears as an equal-weight index (base 100).
 
 - Quotes are cached 5 minutes; daily history 1 hour. If Yahoo is
   unreachable the app falls back to the last cached prices and says so.
-- Gold uses COMEX front-month (`GC=F`), quoted per **troy ounce** — Revolut
-  shows grams (1 ozt = 31.1035 g). Bitcoin uses `BTC-EUR` market price;
+- Gold (XAU): Yahoo has no XAU spot series, so the app uses COMEX
+  front-month futures (`GC=F`) as the closest proxy, quoted per **troy
+  ounce** — Revolut shows grams (1 ozt = 31.1035 g). Bitcoin uses `BTC-EUR` market price;
   Revolut's displayed price includes their spread, so expect a small offset.
 - Returns per lot are price-based in EUR, from your actual entry price
   including fees, so currency moves are part of the return. Annualized and

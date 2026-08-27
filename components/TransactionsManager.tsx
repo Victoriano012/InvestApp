@@ -17,6 +17,7 @@ interface CloseCtx {
   price: number | null; // asset close on/before the date (1 for baskets)
   currency: string;
   usdPerEur: number | null;
+  gbpPerEur: number | null;
   unitValue: number | null; // basket per-unit value (for sells)
 }
 
@@ -46,13 +47,18 @@ const emptyForm = (assetId: number | "" = "", currency = "EUR"): TxnForm => ({
   note: "",
 });
 
-/** Factor converting an amount in `from` to `to` given USD-per-EUR. */
-function convFactor(from: string, to: string, usdPerEur: number | null): number | null {
+/** Factor converting an amount in `from` to `to`, via that day's per-EUR rates. */
+function convFactor(from: string, to: string, ctx: CloseCtx): number | null {
   if (from === to) return 1;
-  if (usdPerEur == null || usdPerEur <= 0) return null;
-  if (from === "EUR" && to === "USD") return usdPerEur;
-  if (from === "USD" && to === "EUR") return 1 / usdPerEur;
-  return null;
+  const perEur: Record<string, number | null | undefined> = {
+    EUR: 1,
+    USD: ctx.usdPerEur,
+    GBP: ctx.gbpPerEur,
+  };
+  const f = perEur[from];
+  const t = perEur[to];
+  if (f == null || t == null || f <= 0 || t <= 0) return null;
+  return t / f;
 }
 
 export default function TransactionsManager() {
@@ -98,7 +104,7 @@ export default function TransactionsManager() {
     if (!isFinite(amt) || amt <= 0 || !isFinite(fee) || fee < 0) return null;
     const price = selAsset.kind === "basket" && form.type === "sell" ? ctx.unitValue : ctx.price;
     if (price == null || price <= 0) return null;
-    const f = convFactor(form.currency, ctx.currency, ctx.usdPerEur);
+    const f = convFactor(form.currency, ctx.currency, ctx);
     if (f == null) return null;
     const net = form.type === "buy" ? (amt - fee) * f : (amt + fee) * f;
     if (net <= 0) return null;
@@ -187,7 +193,7 @@ export default function TransactionsManager() {
 
   const currencyOptions = useMemo(() => {
     const base = selAsset ? selAsset.currency : "EUR";
-    return [...new Set([base, "EUR", "USD"])];
+    return [...new Set([base, "EUR", "USD", "GBP"])];
   }, [selAsset]);
 
   const pickAsset = (id: number | "") => {

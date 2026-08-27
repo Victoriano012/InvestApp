@@ -15,7 +15,8 @@ const SEED: { symbol: string; name: string; category: Category; currency: string
   { symbol: "VIST", name: "Vista Energy", category: "arg_stock", currency: "USD" },
   { symbol: "CRESY", name: "Cresud", category: "arg_stock", currency: "USD" },
   { symbol: "CEPU", name: "Central Puerto", category: "arg_stock", currency: "USD" },
-  { symbol: "GC=F", name: "Gold (oz t)", category: "gold", currency: "USD" },
+  // XAU spot isn't served by Yahoo — COMEX front-month futures are the closest proxy.
+  { symbol: "GC=F", name: "Gold XAU (oz t)", category: "gold", currency: "USD" },
   { symbol: "BTC-EUR", name: "Bitcoin", category: "crypto", currency: "EUR" },
 ];
 
@@ -126,6 +127,14 @@ export function db(): Database.Database {
     _db.prepare("DELETE FROM quotes WHERE symbol = 'ESPX.AS'").run();
     _db.prepare("DELETE FROM meta WHERE key = 'hist:ESPX.AS'").run();
     _db.prepare("INSERT INTO meta (key, value) VALUES ('fix:sp500-amundi', '1')").run();
+  }
+  // Label gold as XAU; only touches the untouched seed name, never a manual rename.
+  const goldFixed = _db.prepare("SELECT value FROM meta WHERE key = 'fix:gold-xau'").get();
+  if (!goldFixed) {
+    _db
+      .prepare("UPDATE assets SET name = 'Gold XAU (oz t)' WHERE symbol = 'GC=F' AND name = 'Gold (oz t)'")
+      .run();
+    _db.prepare("INSERT INTO meta (key, value) VALUES ('fix:gold-xau', '1')").run();
   }
   return _db;
 }
