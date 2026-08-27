@@ -1,36 +1,47 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# InvestApp
 
-## Getting Started
+Personal investment tracker. Transactions are entered manually (no bank/broker
+connections); market prices are fetched automatically from Yahoo Finance and
+cached locally. Everything is computed in EUR (USD assets converted at the
+daily EURUSD rate).
 
-First, run the development server:
+## Run it
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev        # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+For a permanent setup: `npm run build && npm start`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Your data lives in a single SQLite file at `data/investapp.db` (git-ignored).
+Back that file up and you've backed up everything.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Pages
 
-## Learn More
+- **Portfolio** — total value, unrealized/realized P&L, and per-asset
+  annualized returns since your first and since your most recent buy.
+  Click an asset for per-lot stats (mean monthly / annualized return for
+  every individual purchase). The €/% button toggles absolute vs relative
+  numbers everywhere.
+- **Charts** — customizable line chart: any subset of assets, metric
+  (price %, price, holding value, gain € / gain %), accumulated vs
+  per-period wins, one-line-per-buy mode, ✕ marks or vertical lines at your
+  trades, rebase to range start or first buy, native currency, log scale,
+  and a data-table view.
+- **Capital** — stacked chart of invested capital split by category
+  (ETFs / US stocks / Argentine stocks / gold / Bitcoin), in % or €.
+  Vertical black lines mark transactions; tap one for the details.
+- **Activity** — add/edit/delete transactions, and manage assets
+  (add any instrument via Yahoo search by ticker, ISIN, or name).
 
-To learn more about Next.js, take a look at the following resources:
+## Notes
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Quotes are cached 5 minutes; daily history 1 hour. If Yahoo is
+  unreachable the app falls back to the last cached prices and says so.
+- Gold uses COMEX front-month (`GC=F`), quoted per **troy ounce** — Revolut
+  shows grams (1 ozt = 31.1035 g). Bitcoin uses `BTC-EUR` market price;
+  Revolut's displayed price includes their spread, so expect a small offset.
+- Returns per lot are price-based in EUR, from your actual entry price
+  including fees, so currency moves are part of the return. Annualized and
+  monthly rates are hidden for lots held under 30 days.
