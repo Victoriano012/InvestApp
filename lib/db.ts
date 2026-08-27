@@ -6,7 +6,7 @@ import type { Asset, BasketComponent, Category, Txn } from "./types";
 let _db: Database.Database | null = null;
 
 const SEED: { symbol: string; name: string; category: Category; currency: string }[] = [
-  { symbol: "ESPX.AS", name: "S&P 500 ESG Acc (iShares)", category: "etf", currency: "USD" },
+  { symbol: "S500.PA", name: "S&P 500 Screened Acc (Amundi)", category: "etf", currency: "EUR" },
   { symbol: "6AQQ.DE", name: "Amundi Nasdaq-100 Acc", category: "etf", currency: "EUR" },
   { symbol: "NVDA", name: "NVIDIA", category: "us_stock", currency: "USD" },
   { symbol: "AAPL", name: "Apple", category: "us_stock", currency: "USD" },
@@ -115,6 +115,17 @@ export function db(): Database.Database {
     );
     for (const c of COLECCION_ARGENTINA) insC.run(r.lastInsertRowid, c.symbol, c.name);
     _db.prepare("INSERT INTO meta (key, value) VALUES ('seed:coleccion-argentina', '1')").run();
+  }
+  // The S&P 500 fund is Amundi's, not iShares' (fund renamed "Screened", ex-"ESG").
+  const sp500Fixed = _db.prepare("SELECT value FROM meta WHERE key = 'fix:sp500-amundi'").get();
+  if (!sp500Fixed) {
+    _db
+      .prepare("UPDATE assets SET symbol = ?, name = ?, currency = 'EUR' WHERE symbol = 'ESPX.AS'")
+      .run("S500.PA", "S&P 500 Screened Acc (Amundi)");
+    _db.prepare("DELETE FROM price_history WHERE symbol = 'ESPX.AS'").run();
+    _db.prepare("DELETE FROM quotes WHERE symbol = 'ESPX.AS'").run();
+    _db.prepare("DELETE FROM meta WHERE key = 'hist:ESPX.AS'").run();
+    _db.prepare("INSERT INTO meta (key, value) VALUES ('fix:sp500-amundi', '1')").run();
   }
   return _db;
 }
