@@ -17,9 +17,12 @@ import { fmtDate, fmtDateShort, fmtEUR, fmtMoney, fmtNum, fmtPct } from "@/lib/f
 import { categoryColor, chrome } from "@/lib/palette";
 import { CATEGORIES, CATEGORY_LABEL, type CapitalData, type Category } from "@/lib/types";
 
+type CapitalView = "value" | "invested";
+
 export default function CapitalChart() {
   const { data, error } = useJson<CapitalData>("/api/capital");
   const [mode, toggleMode] = useValueMode();
+  const [view, setView] = useState<CapitalView>("value");
   const dark = useDark();
   const C = chrome(dark);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -28,28 +31,29 @@ export default function CapitalChart() {
 
   const model = useMemo(() => {
     if (!data || data.dates.length === 0) return null;
+    const src = view === "value" ? data.valueByCategory : data.byCategory;
     const txnDateSet = new Set(data.txnDates.map((t) => t.date));
     let rows = data.dates.map((d, i) => {
       const r: Record<string, string | number> = { date: d };
-      for (const c of CATEGORIES) r[c.key] = data.byCategory[c.key][i] ?? 0;
+      for (const c of CATEGORIES) r[c.key] = src[c.key][i] ?? 0;
       return r;
     });
     if (rows.length > 700) {
       const stride = Math.ceil(rows.length / 700);
       rows = rows.filter((r, i) => i % stride === 0 || i === rows.length - 1 || txnDateSet.has(r.date as string));
     }
-    const activeCats = CATEGORIES.filter((c) => data.byCategory[c.key].some((v) => v > 0));
+    const activeCats = CATEGORIES.filter((c) => src[c.key].some((v) => v > 0));
     return { rows, activeCats };
-  }, [data]);
+  }, [data, view]);
 
   if (error) return <p className="p-6 text-sm text-down">Failed to load: {error}</p>;
   if (!data) return <p className="p-6 text-sm text-muted">Loading…</p>;
   if (!model || data.txnDates.length === 0)
     return (
       <div className="space-y-4">
-        <h1 className="text-xl font-semibold tracking-tight">Invested capital</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Capital</h1>
         <p className="rounded-lg border border-line bg-surface p-8 text-center text-sm text-muted">
-          No transactions yet — this chart shows how your invested capital is split across categories over time.
+          No transactions yet — this chart shows how your capital is split across categories over time.
         </p>
       </div>
     );
@@ -78,12 +82,26 @@ export default function CapitalChart() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Invested capital</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Capital</h1>
           <p className="text-xs text-muted">
-            Cost basis of what you hold, split by category. Vertical lines are transactions — tap one for details.
+            {view === "value"
+              ? "Market value of what you hold, split by category."
+              : "Invested capital (cost basis of what you hold), split by category — moves only at transactions."}{" "}
+            Vertical lines are transactions — tap one for details.
           </p>
         </div>
-        <ModeToggle mode={mode} onToggle={toggleMode} />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setView(view === "value" ? "invested" : "value")}
+            className="inline-flex overflow-hidden rounded-md border border-line text-sm"
+            title="Toggle between market value and invested capital"
+            aria-label="Toggle between market value and invested capital"
+          >
+            <span className={`px-2.5 py-1 ${view === "value" ? "bg-accent/15 font-semibold text-accent" : "text-muted"}`}>Value</span>
+            <span className={`px-2.5 py-1 ${view === "invested" ? "bg-accent/15 font-semibold text-accent" : "text-muted"}`}>Invested</span>
+          </button>
+          <ModeToggle mode={mode} onToggle={toggleMode} />
+        </div>
       </div>
 
       <div className="rounded-lg border border-line bg-surface p-2 md:p-3">
@@ -118,7 +136,7 @@ export default function CapitalChart() {
               {activeCats.map((c) => (
                 <Area
                   key={c.key}
-                  type="stepAfter"
+                  type={view === "value" ? "linear" : "stepAfter"}
                   dataKey={c.key}
                   name={c.label}
                   stackId="cap"

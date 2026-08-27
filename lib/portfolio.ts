@@ -631,31 +631,41 @@ export async function getCapitalData(): Promise<CapitalData> {
   const assets = listAssets();
   const txns = listTxns();
   const today = todayISO();
+  const emptyCats = (): Record<Category, number[]> => ({
+    etf: [],
+    us_stock: [],
+    arg_stock: [],
+    gold: [],
+    crypto: [],
+  });
   if (txns.length === 0) {
-    return {
-      dates: [],
-      byCategory: { etf: [], us_stock: [], arg_stock: [], gold: [], crypto: [] },
-      txnDates: [],
-    };
+    return { dates: [], byCategory: emptyCats(), valueByCategory: emptyCats(), txnDates: [] };
   }
   const from = txns.reduce((m, t) => (t.date < m ? t.date : m), today);
-  await ensureHistory(FX_SYMBOL, from);
   const baskets = new Map<number, BasketComponent[]>();
   for (const a of assets) if (a.kind === "basket") baskets.set(a.id, listBasketComponents(a.id));
   const compSymbols = [...new Set([...baskets.values()].flat().map((c) => c.symbol))];
-  if (txns.some((t) => baskets.has(t.asset_id)) && compSymbols.length) {
-    await Promise.all(compSymbols.map((s) => ensureHistory(s, from)));
-  }
+  const txnAssetIds = new Set(txns.map((t) => t.asset_id));
+  // Market value needs each traded asset's price history, not just FX + baskets.
+  await ensureAllHistory(
+    [
+      ...assets.filter((a) => a.kind !== "basket" && txnAssetIds.has(a.id)).map((a) => a.symbol),
+      ...compSymbols,
+    ],
+    from
+  );
   const axis = buildAxis(from, today);
   const fx = buildFx(from, today);
 
-  const byCategory: Record<Category, number[]> = {
+  const zeroCats = (): Record<Category, number[]> => ({
     etf: new Array(axis.length).fill(0),
     us_stock: new Array(axis.length).fill(0),
     arg_stock: new Array(axis.length).fill(0),
     gold: new Array(axis.length).fill(0),
     crypto: new Array(axis.length).fill(0),
-  };
+  });
+  const byCategory = zeroCats();
+  const valueByCategory = zeroCats();
 
   const assetById = new Map(assets.map((a) => [a.id, a]));
 
@@ -663,13 +673,24 @@ export async function getCapitalData(): Promise<CapitalData> {
     const at = txns.filter((t) => t.asset_id === asset.id);
     if (!at.length) continue;
     const arr = byCategory[asset.category];
+    const varr = valueByCategory[asset.category];
     if (asset.kind === "basket") {
       const prices = componentPricesEUR(baskets.get(asset.id) ?? [], axis, fx);
       const tl = computeBasketTimeline(at, axis, prices);
-      for (let i = 0; i < axis.length; i++) arr[i] += tl.costEUR[i];
+      for (let i = 0; i < axis.length; i++) {
+        arr[i] += tl.costEUR[i];
+        varr[i] += tl.valueEUR[i];
+      }
     } else {
       const tl = computeTimeline(at, axis, asset.currency, fx);
-      for (let i = 0; i < axis.length; i++) arr[i] += tl.costEUR[i];
+      const priceNative = ffill(axis, historyMap(asset.symbol));
+      for (let i = 0; i < axis.length; i++) {
+        arr[i] += tl.costEUR[i];
+        const p = priceNative[i];
+        const f = p != null ? eurFactor(asset.currency, fx.usdPerEur[i]) : null;
+        // Cost stands in on days with no price yet (fresh symbol, sparse history).
+        varr[i] += p != null && f != null ? tl.qty[i] * p * f : tl.costEUR[i];
+      }
     }
   }
 
@@ -698,5 +719,5 @@ export async function getCapitalData(): Promise<CapitalData> {
     .sort((a, b) => (a[0] < b[0] ? -1 : 1))
     .map(([date, list]) => ({ date, txns: list }));
 
-  return { dates: axis, byCategory, txnDates };
+  return { dates: axis, byCategory, valueByCategory, txnDates };
 }

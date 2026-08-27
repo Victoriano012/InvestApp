@@ -134,6 +134,8 @@ export interface CapitalData {
   dates: string[];
   // invested capital (EUR, FIFO cost of held shares) per category per date
   byCategory: Record<Category, number[]>;
+  // market value (EUR) of held shares per category per date
+  valueByCategory: Record<Category, number[]>;
   txnDates: {
     date: string;
     txns: {
