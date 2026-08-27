@@ -6,7 +6,8 @@ import type { Asset, BasketComponent, Category, Txn } from "./types";
 let _db: Database.Database | null = null;
 
 const SEED: { symbol: string; name: string; category: Category; currency: string }[] = [
-  { symbol: "S500.PA", name: "S&P 500 Screened Acc (Amundi)", category: "etf", currency: "EUR" },
+  // Revolut's "F500 — Amundi S&P 500 ESG Acc"; fund renamed "Screened", Xetra listing.
+  { symbol: "F500.DE", name: "S&P 500 Screened Acc (Amundi)", category: "etf", currency: "EUR" },
   { symbol: "6AQQ.DE", name: "Amundi Nasdaq-100 Acc", category: "etf", currency: "EUR" },
   { symbol: "NVDA", name: "NVIDIA", category: "us_stock", currency: "USD" },
   { symbol: "AAPL", name: "Apple", category: "us_stock", currency: "USD" },
@@ -127,6 +128,15 @@ export function db(): Database.Database {
     _db.prepare("DELETE FROM quotes WHERE symbol = 'ESPX.AS'").run();
     _db.prepare("DELETE FROM meta WHERE key = 'hist:ESPX.AS'").run();
     _db.prepare("INSERT INTO meta (key, value) VALUES ('fix:sp500-amundi', '1')").run();
+  }
+  // Revolut trades the Xetra listing (F500), not Paris (S500) — same fund, same EUR price.
+  const f500Fixed = _db.prepare("SELECT value FROM meta WHERE key = 'fix:sp500-f500'").get();
+  if (!f500Fixed) {
+    _db.prepare("UPDATE assets SET symbol = 'F500.DE' WHERE symbol = 'S500.PA'").run();
+    _db.prepare("DELETE FROM price_history WHERE symbol = 'S500.PA'").run();
+    _db.prepare("DELETE FROM quotes WHERE symbol = 'S500.PA'").run();
+    _db.prepare("DELETE FROM meta WHERE key = 'hist:S500.PA'").run();
+    _db.prepare("INSERT INTO meta (key, value) VALUES ('fix:sp500-f500', '1')").run();
   }
   // Label gold as XAU; only touches the untouched seed name, never a manual rename.
   const goldFixed = _db.prepare("SELECT value FROM meta WHERE key = 'fix:gold-xau'").get();
