@@ -47,6 +47,7 @@ export function useJson<T>(url: string): { data: T | null; error: string | null;
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   useEffect(() => {
+    if (!url) return;
     let alive = true;
     setError(null);
     fetch(url)

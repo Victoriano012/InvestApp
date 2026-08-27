@@ -52,7 +52,7 @@ export default function PortfolioView() {
       </div>
 
       {/* Summary tiles */}
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4 md:gap-3">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 md:gap-3">
         <Tile label="Total value" value={fmtEUR(data.totalValueEUR)} />
         <Tile
           label="Unrealized"
@@ -60,13 +60,6 @@ export default function PortfolioView() {
             ? fmtPct(data.totalCostEUR > 0 ? data.totalUnrealizedEUR / data.totalCostEUR : null)
             : fmtSignedEUR(data.totalUnrealizedEUR)}
           tone={data.totalUnrealizedEUR}
-        />
-        <Tile
-          label="Today"
-          value={pct
-            ? fmtPct(data.totalValueEUR > 0 && data.dayChangeEUR != null ? data.dayChangeEUR / (data.totalValueEUR - data.dayChangeEUR) : null)
-            : fmtSignedEUR(data.dayChangeEUR)}
-          tone={data.dayChangeEUR ?? 0}
         />
         <Tile label="Invested" value={fmtEUR(data.totalInvestedEUR)} sub={data.totalRealizedEUR !== 0 ? `realized ${fmtSignedEUR(data.totalRealizedEUR)}` : undefined} />
       </div>
@@ -85,7 +78,6 @@ export default function PortfolioView() {
               <th className="px-3 py-2 font-medium">Asset</th>
               <th className="px-3 py-2 text-right font-medium">{pct ? "Weight" : "Value"}</th>
               <th className="px-3 py-2 text-right font-medium">{pct ? "Gain %" : "Gain €"}</th>
-              <th className="px-3 py-2 text-right font-medium">Today</th>
               <th className="px-3 py-2 text-right font-medium" title="Annualized return since your first buy (price-based, in EUR)">Ann. since 1st buy</th>
               <th className="px-3 py-2 text-right font-medium" title="Annualized return since your most recent buy (price-based, in EUR)">Ann. since last buy</th>
             </tr>
@@ -119,7 +111,7 @@ export default function PortfolioView() {
               >
                 <span className="h-2.5 w-2.5 rounded-full" style={{ background: categoryColor(h.asset.category, dark) }} />
                 <span>{h.asset.name}</span>
-                <Delta v={h.dayChangePct} />
+                <span className="text-xs text-muted">{h.asset.kind === "basket" ? "basket" : h.asset.symbol}</span>
               </Link>
             ))}
           </div>
@@ -153,7 +145,7 @@ function AssetLabel({ h, dark }: { h: Holding; dark: boolean }) {
       <div>
         <div className="font-medium">{h.asset.name}</div>
         <div className="text-xs text-muted">
-          {h.asset.symbol} · {CATEGORY_LABEL[h.asset.category]}
+          {h.asset.kind === "basket" ? "Basket" : h.asset.symbol} · {CATEGORY_LABEL[h.asset.category]}
           {h.txnCount > 1 && ` · ${h.lots.filter((l) => l.remaining > 0).length} lots`}
         </div>
       </div>
@@ -173,9 +165,6 @@ function Row({ h, pct, dark }: { h: Holding; pct: boolean; dark: boolean }) {
       <td className="tnum px-3 py-2.5 text-right">
         <Delta v={pct ? h.unrealizedPct : h.unrealizedEUR} money={!pct} />
       </td>
-      <td className="tnum px-3 py-2.5 text-right">
-        <Delta v={pct ? h.dayChangePct : h.dayChangeEUR} money={!pct} />
-      </td>
       <td className="tnum px-3 py-2.5 text-right"><Annual s={h.sinceFirstBuy} /></td>
       <td className="tnum px-3 py-2.5 text-right"><Annual s={h.sinceLastBuy} /></td>
     </tr>
@@ -194,11 +183,7 @@ function Card({ h, pct, dark }: { h: Holding; pct: boolean; dark: boolean }) {
           </div>
         </div>
       </div>
-      <div className="mt-2 grid grid-cols-3 gap-1 text-xs">
-        <div>
-          <div className="text-muted">Today</div>
-          <div className="tnum"><Delta v={pct ? h.dayChangePct : h.dayChangeEUR} money={!pct} /></div>
-        </div>
+      <div className="mt-2 grid grid-cols-2 gap-1 text-xs">
         <div>
           <div className="text-muted">Ann. 1st buy</div>
           <div className="tnum"><Annual s={h.sinceFirstBuy} /></div>

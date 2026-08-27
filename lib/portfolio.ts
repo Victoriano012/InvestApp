@@ -1,4 +1,4 @@
-import { listAssets, listTxns } from "./db";
+import { getCachedQuote, listAssets, listBasketComponents, listTxns, type CachedQuote } from "./db";
 import {
   ensureAllHistory,
   ensureHistory,
@@ -9,6 +9,7 @@ import {
 import { addDays, daysBetween, todayISO } from "./format";
 import type {
   Asset,
+  BasketComponent,
   CapitalData,
   Category,
   ExplorerAsset,
@@ -162,7 +163,217 @@ function computeTimeline(
   return { qty, costEUR, realizedEUR, lots };
 }
 
+// ---------- basket timeline ----------
+//
+// A basket buy of A € (stored as quantity=A "units" at price=1 EUR) is split
+// equally across the components at that day's closes: each unit is a fixed
+// mini-portfolio. Sells consume units FIFO, like any other asset.
+
+interface BasketLot {
+  txnId: number;
+  date: string;
+  units: number; // EUR invested at buy (= txn quantity)
+  remaining: number;
+  unitCostEUR: number; // 1 + fees/units
+  compQty: number[]; // shares of each component bought with these units
+}
+
+interface BasketTimeline {
+  units: number[];
+  costEUR: number[];
+  realizedEUR: number[];
+  valueEUR: number[]; // market value of remaining units per date
+  lots: BasketLot[];
+}
+
+/** Currency a basket component is quoted in (from the quote cache; ADRs default to USD). */
+function componentCurrency(symbol: string): string {
+  return getCachedQuote(symbol)?.currency ?? "USD";
+}
+
+/** EUR price series for each component along the axis (ffilled daily closes). */
+function componentPricesEUR(
+  comps: BasketComponent[],
+  axis: string[],
+  fx: FxLookup
+): (number | null)[][] {
+  return comps.map((c) => {
+    const cur = componentCurrency(c.symbol);
+    const nat = ffill(axis, historyMap(c.symbol));
+    return nat.map((p, i) => {
+      if (p == null) return null;
+      // fx.at() is date-keyed: the axis here may be shorter than fx's own axis.
+      const f = eurFactor(cur, fx.at(axis[i]));
+      return f != null ? p * f : null;
+    });
+  });
+}
+
+function computeBasketTimeline(
+  txns: Txn[],
+  axis: string[],
+  compPricesEUR: (number | null)[][]
+): BasketTimeline {
+  const byDate = new Map<string, Txn[]>();
+  for (const t of txns) {
+    if (!byDate.has(t.date)) byDate.set(t.date, []);
+    byDate.get(t.date)!.push(t);
+  }
+  const n = compPricesEUR.length;
+  const lots: BasketLot[] = [];
+  const units: number[] = new Array(axis.length);
+  const costEUR: number[] = new Array(axis.length);
+  const realizedEUR: number[] = new Array(axis.length);
+  const valueEUR: number[] = new Array(axis.length);
+  let u = 0;
+  let cost = 0;
+  let realized = 0;
+
+  for (let i = 0; i < axis.length; i++) {
+    const todays = byDate.get(axis[i]);
+    if (todays) {
+      for (const t of todays) {
+        if (t.type === "buy") {
+          const amount = t.quantity * t.price; // EUR (price is 1 by convention)
+          const unitCostEUR = t.price + (t.fees || 0) / t.quantity;
+          const avail: number[] = [];
+          for (let j = 0; j < n; j++) if (compPricesEUR[j][i] != null) avail.push(j);
+          const compQty = new Array<number>(n).fill(0);
+          for (const j of avail) compQty[j] = amount / avail.length / compPricesEUR[j][i]!;
+          lots.push({ txnId: t.id, date: t.date, units: t.quantity, remaining: t.quantity, unitCostEUR, compQty });
+          u += t.quantity;
+          cost += t.quantity * unitCostEUR;
+        } else {
+          const unitProceedsEUR = t.price - (t.fees || 0) / t.quantity;
+          let toSell = t.quantity;
+          for (const lot of lots) {
+            if (toSell <= 0) break;
+            if (lot.remaining <= 0) continue;
+            const take = Math.min(lot.remaining, toSell);
+            lot.remaining -= take;
+            toSell -= take;
+            u -= take;
+            cost -= take * lot.unitCostEUR;
+            realized += take * (unitProceedsEUR - lot.unitCostEUR);
+          }
+        }
+      }
+    }
+    units[i] = u;
+    costEUR[i] = cost;
+    realizedEUR[i] = realized;
+    let v = 0;
+    for (const lot of lots) {
+      if (lot.remaining <= 0) continue;
+      let full = 0;
+      for (let j = 0; j < n; j++) {
+        const p = compPricesEUR[j][i];
+        if (p != null) full += lot.compQty[j] * p;
+      }
+      v += (lot.remaining / lot.units) * full;
+    }
+    valueEUR[i] = v;
+  }
+  return { units, costEUR, realizedEUR, valueEUR, lots };
+}
+
+/**
+ * Market value of 1 basket unit at `date` (EUR), given the transactions up to
+ * that date. Used by the money-entry form to size basket sells. Null when the
+ * basket holds nothing on that date.
+ */
+export async function basketUnitValueOn(assetId: number, date: string): Promise<number | null> {
+  const comps = listBasketComponents(assetId);
+  const txns = listTxns(assetId).filter((t) => t.date <= date);
+  if (!comps.length || !txns.length) return null;
+  const from = txns[0].date;
+  await ensureAllHistory(comps.map((c) => c.symbol), from);
+  const axis = buildAxis(from, date);
+  const fx = buildFx(from, date);
+  const prices = componentPricesEUR(comps, axis, fx);
+  const tl = computeBasketTimeline(txns, axis, prices);
+  const last = axis.length - 1;
+  return tl.units[last] > 0 ? tl.valueEUR[last] / tl.units[last] : null;
+}
+
 // ---------- portfolio summary ----------
+
+function basketHolding(
+  asset: Asset,
+  comps: BasketComponent[],
+  at: Txn[],
+  today: string,
+  fx: FxLookup,
+  fxNow: number | null,
+  quotes: Map<string, CachedQuote>
+): Holding {
+  const axis = at.length ? buildAxis(at[0].date, today) : [];
+  const prices = at.length ? componentPricesEUR(comps, axis, fx) : [];
+  const tl = at.length ? computeBasketTimeline(at, axis, prices) : null;
+
+  // Current EUR price per component: live quote, else last cached close.
+  const priceNow = comps.map((c, j) => {
+    const q = quotes.get(c.symbol);
+    if (q) {
+      const f = eurFactor(q.currency, fxNow);
+      if (f != null) return q.price * f;
+    }
+    const arr = prices[j] ?? [];
+    for (let i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i];
+    return null;
+  });
+
+  const lots: LotStats[] = (tl?.lots ?? []).map((lot) => {
+    let full = 0; // value now of the lot's original composition
+    lot.compQty.forEach((q, j) => {
+      const p = priceNow[j];
+      if (p != null) full += q * p;
+    });
+    const perUnit = lot.units > 0 ? full / lot.units : 0;
+    const value = lot.units > 0 ? (lot.remaining / lot.units) * full : 0;
+    return {
+      txnId: lot.txnId,
+      date: lot.date,
+      quantity: lot.units,
+      remaining: lot.remaining,
+      priceNative: 1,
+      priceEUR: lot.unitCostEUR,
+      costEUR: lot.units * lot.unitCostEUR,
+      valueEUR: value,
+      gainEUR: value - lot.remaining * lot.unitCostEUR,
+      stats: returnStats(lot.unitCostEUR, perUnit, lot.date, today),
+    };
+  });
+
+  const qty = tl ? tl.units[tl.units.length - 1] : 0;
+  const cost = tl ? tl.costEUR[tl.costEUR.length - 1] : 0;
+  const realized = tl ? tl.realizedEUR[tl.realizedEUR.length - 1] : 0;
+  const value = lots.reduce((s, l) => s + l.valueEUR, 0);
+
+  const buys = at.filter((t) => t.type === "buy");
+  const lotBy = new Map(lots.map((l) => [l.txnId, l]));
+  const firstBuy = buys[0] ?? null;
+  const lastBuy = buys[buys.length - 1] ?? null;
+
+  return {
+    asset,
+    quantity: qty,
+    priceNative: qty > 0 ? value / qty : null,
+    priceEUR: qty > 0 ? value / qty : null,
+    valueEUR: value,
+    costEUR: cost,
+    unrealizedEUR: value - cost,
+    unrealizedPct: cost > 0 ? (value - cost) / cost : null,
+    realizedEUR: realized,
+    weightPct: 0, // filled by the caller
+    sinceFirstBuy: firstBuy ? lotBy.get(firstBuy.id)?.stats ?? null : null,
+    sinceLastBuy: lastBuy ? lotBy.get(lastBuy.id)?.stats ?? null : null,
+    firstBuyDate: firstBuy?.date ?? null,
+    lastBuyDate: lastBuy?.date ?? null,
+    lots,
+    txnCount: at.length,
+  };
+}
 
 export async function getPortfolio(): Promise<PortfolioSummary> {
   const assets = listAssets();
@@ -170,9 +381,20 @@ export async function getPortfolio(): Promise<PortfolioSummary> {
   const today = todayISO();
   const minDate = txns.length ? txns.reduce((m, t) => (t.date < m ? t.date : m), today) : today;
 
+  const baskets = new Map<number, BasketComponent[]>();
+  for (const a of assets) if (a.kind === "basket") baskets.set(a.id, listBasketComponents(a.id));
+  const compSymbols = [...new Set([...baskets.values()].flat().map((c) => c.symbol))];
+
   await ensureHistory(FX_SYMBOL, minDate);
-  const symbols = assets.map((a) => a.symbol);
-  const { quotes, stale } = await getQuotes([...symbols, FX_SYMBOL]);
+  // Component closes are needed back to the earliest basket buy (to split it).
+  const basketTxns = txns.filter((t) => baskets.has(t.asset_id));
+  if (basketTxns.length && compSymbols.length) {
+    const from = basketTxns.reduce((m, t) => (t.date < m ? t.date : m), today);
+    await Promise.all(compSymbols.map((s) => ensureHistory(s, from)));
+  }
+
+  const symbols = assets.filter((a) => a.kind !== "basket").map((a) => a.symbol);
+  const { quotes, stale } = await getQuotes([...symbols, ...compSymbols, FX_SYMBOL]);
 
   const fx = buildFx(minDate, today);
   const fxNow = quotes.get(FX_SYMBOL)?.price ?? fx.at(today);
@@ -181,13 +403,17 @@ export async function getPortfolio(): Promise<PortfolioSummary> {
   let totalValue = 0;
   let totalCost = 0;
   let totalRealized = 0;
-  let dayChangeTotal: number | null = 0;
-
-  const axisIdxToday = fx.axis.length - 1;
-  void axisIdxToday;
 
   for (const asset of assets) {
     const at = txns.filter((t) => t.asset_id === asset.id);
+    if (asset.kind === "basket") {
+      const h = basketHolding(asset, baskets.get(asset.id) ?? [], at, today, fx, fxNow, quotes);
+      totalValue += h.valueEUR;
+      totalCost += h.costEUR;
+      totalRealized += h.realizedEUR;
+      holdings.push(h);
+      continue;
+    }
     const quote = quotes.get(asset.symbol);
     const priceNative = quote?.price ?? null;
     const f = eurFactor(asset.currency, fxNow);
@@ -231,18 +457,6 @@ export async function getPortfolio(): Promise<PortfolioSummary> {
       };
     });
 
-    const dayPct =
-      quote?.prev_close != null && quote.prev_close > 0 && priceNative != null
-        ? priceNative / quote.prev_close - 1
-        : null;
-    const dayEUR =
-      dayPct != null && priceNative != null && f != null
-        ? qty * (priceNative - quote!.prev_close!) * f
-        : null;
-
-    if (dayEUR == null && qty > 0) dayChangeTotal = null;
-    else if (dayChangeTotal != null && dayEUR != null) dayChangeTotal += dayEUR;
-
     totalValue += value;
     totalCost += cost;
     totalRealized += realized;
@@ -258,8 +472,6 @@ export async function getPortfolio(): Promise<PortfolioSummary> {
       unrealizedPct: cost > 0 ? (value - cost) / cost : null,
       realizedEUR: realized,
       weightPct: 0, // filled below
-      dayChangePct: dayPct,
-      dayChangeEUR: dayEUR,
       sinceFirstBuy: statsFor(firstBuy),
       sinceLastBuy: statsFor(lastBuy),
       firstBuyDate: firstBuy?.date ?? null,
@@ -280,7 +492,6 @@ export async function getPortfolio(): Promise<PortfolioSummary> {
     totalUnrealizedEUR: totalValue - totalCost,
     totalRealizedEUR: totalRealized,
     totalInvestedEUR: totalCost,
-    dayChangeEUR: dayChangeTotal,
     holdings,
     quotesAsOf: oldest != null ? new Date(oldest).toISOString() : null,
     staleQuotes: stale,
@@ -297,15 +508,74 @@ export async function getExplorerData(): Promise<ExplorerData> {
   const minTxn = txns.length ? txns.reduce((m, t) => (t.date < m ? t.date : m), today) : today;
   const from = minTxn < yearBack ? minTxn : yearBack;
 
-  await ensureAllHistory(assets.map((a) => a.symbol), from);
+  const baskets = new Map<number, BasketComponent[]>();
+  for (const a of assets) if (a.kind === "basket") baskets.set(a.id, listBasketComponents(a.id));
+  const compSymbols = [...new Set([...baskets.values()].flat().map((c) => c.symbol))];
+
+  await ensureAllHistory(
+    [...assets.filter((a) => a.kind !== "basket").map((a) => a.symbol), ...compSymbols],
+    from
+  );
   const axis = buildAxis(from, today);
   const fx = buildFx(from, today);
+  const idxOf = new Map(axis.map((d, i) => [d, i]));
 
   const catCounters = new Map<Category, number>();
 
   const out: ExplorerAsset[] = assets.map((asset) => {
     const dashIndex = catCounters.get(asset.category) ?? 0;
     catCounters.set(asset.category, dashIndex + 1);
+
+    if (asset.kind === "basket") {
+      const comps = baskets.get(asset.id) ?? [];
+      const prices = componentPricesEUR(comps, axis, fx);
+      // Equal-weight index (base 100 at the first date all components trade).
+      // Per-lot chart lines use this index, so they are equal-weight-at-index-
+      // base rather than equal-weight-at-buy — close enough for plotting;
+      // the per-buy table on the asset page is exact.
+      let i0 = -1;
+      for (let i = 0; i < axis.length && i0 < 0; i++) {
+        if (prices.length > 0 && prices.every((cp) => cp[i] != null)) i0 = i;
+      }
+      const priceEUR = axis.map((_, i) => {
+        if (i0 < 0 || i < i0) return null;
+        let s = 0;
+        for (const cp of prices) s += cp[i]! / cp[i0]!;
+        return (100 * s) / prices.length;
+      });
+      const at = txns.filter((t) => t.asset_id === asset.id);
+      const tl = at.length ? computeBasketTimeline(at, axis, prices) : null;
+      return {
+        id: asset.id,
+        symbol: asset.symbol,
+        name: asset.name,
+        category: asset.category,
+        currency: asset.currency,
+        dashIndex,
+        priceEUR,
+        priceNative: priceEUR,
+        valueEUR: tl ? tl.valueEUR : axis.map(() => null),
+        costEUR: tl ? tl.costEUR : axis.map(() => null),
+        realizedEUR: tl ? tl.realizedEUR : axis.map(() => null),
+        lots: (tl?.lots ?? []).map((l) => {
+          const base = priceEUR[idxOf.get(l.date) ?? -1] ?? null;
+          return {
+            txnId: l.txnId,
+            date: l.date,
+            quantity: base ? l.units / base : l.units,
+            priceNative: base ?? 1,
+            priceEUR: base ?? 1,
+          };
+        }),
+        txns: at.map((t) => ({
+          id: t.id,
+          type: t.type,
+          date: t.date,
+          quantity: t.quantity,
+          price: t.price,
+        })),
+      };
+    }
 
     const priceNative = ffill(axis, historyMap(asset.symbol));
     const priceEUR = priceNative.map((p, i) => {
@@ -370,6 +640,12 @@ export async function getCapitalData(): Promise<CapitalData> {
   }
   const from = txns.reduce((m, t) => (t.date < m ? t.date : m), today);
   await ensureHistory(FX_SYMBOL, from);
+  const baskets = new Map<number, BasketComponent[]>();
+  for (const a of assets) if (a.kind === "basket") baskets.set(a.id, listBasketComponents(a.id));
+  const compSymbols = [...new Set([...baskets.values()].flat().map((c) => c.symbol))];
+  if (txns.some((t) => baskets.has(t.asset_id)) && compSymbols.length) {
+    await Promise.all(compSymbols.map((s) => ensureHistory(s, from)));
+  }
   const axis = buildAxis(from, today);
   const fx = buildFx(from, today);
 
@@ -386,9 +662,15 @@ export async function getCapitalData(): Promise<CapitalData> {
   for (const asset of assets) {
     const at = txns.filter((t) => t.asset_id === asset.id);
     if (!at.length) continue;
-    const tl = computeTimeline(at, axis, asset.currency, fx);
     const arr = byCategory[asset.category];
-    for (let i = 0; i < axis.length; i++) arr[i] += tl.costEUR[i];
+    if (asset.kind === "basket") {
+      const prices = componentPricesEUR(baskets.get(asset.id) ?? [], axis, fx);
+      const tl = computeBasketTimeline(at, axis, prices);
+      for (let i = 0; i < axis.length; i++) arr[i] += tl.costEUR[i];
+    } else {
+      const tl = computeTimeline(at, axis, asset.currency, fx);
+      for (let i = 0; i < axis.length; i++) arr[i] += tl.costEUR[i];
+    }
   }
 
   const byDate = new Map<string, CapitalData["txnDates"][number]["txns"]>();

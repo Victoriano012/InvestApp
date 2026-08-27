@@ -34,6 +34,22 @@ Back that file up and you've backed up everything.
   Vertical black lines mark transactions; tap one for the details.
 - **Activity** — add/edit/delete transactions, and manage assets
   (add any instrument via Yahoo search by ticker, ISIN, or name).
+  Transactions are entered **by money, not quantity**: type what you paid
+  (or received), pick the currency (defaults to the asset's; EUR↔USD converts
+  at that day's rate), and the app derives the quantity from that day's
+  closing price. Editing a transaction still exposes the raw
+  quantity/price/fees if you want exact figures.
+
+## Basket assets
+
+A basket is a group of instruments bought together in **equal parts at the
+moment of each buy** (like Vesto's "Colecciones"). Buys are recorded in EUR;
+each buy locks in the component quantities at that day's prices, so per-buy
+returns are exact. Sells consume buys FIFO. The seeded **Colección
+Argentina** ships with a best-guess list of 16 Argentine ADRs — edit it via
+the ☰ button next to the basket on the Activity page (search results there
+also get a "→ add to basket" button), or create new baskets from the same
+page. In charts, a basket appears as an equal-weight index (base 100).
 
 ## Notes
 
@@ -45,3 +61,7 @@ Back that file up and you've backed up everything.
 - Returns per lot are price-based in EUR, from your actual entry price
   including fees, so currency moves are part of the return. Annualized and
   monthly rates are hidden for lots held under 30 days.
+- Money-based entry uses the **closing price** of the chosen day (closest
+  earlier close if markets were shut), so derived quantities can differ
+  slightly from your broker's fill — edit the transaction if you need the
+  exact quantity.

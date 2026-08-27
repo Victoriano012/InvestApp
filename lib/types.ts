@@ -12,13 +12,28 @@ export const CATEGORY_LABEL: Record<Category, string> = Object.fromEntries(
   CATEGORIES.map((c) => [c.key, c.label])
 ) as Record<Category, string>;
 
+export type AssetKind = "single" | "basket";
+
 export interface Asset {
   id: number;
   symbol: string;
   name: string;
   category: Category;
-  currency: string; // currency the symbol is quoted in
+  currency: string; // currency the symbol is quoted in (EUR for baskets)
   sort: number;
+  kind: AssetKind;
+}
+
+/**
+ * A basket asset (e.g. Vesto's "Colección Argentina") holds several symbols.
+ * Each BUY splits the amount equally across components at that day's prices;
+ * basket transactions are stored with price=1, quantity=EUR invested ("units").
+ */
+export interface BasketComponent {
+  id: number;
+  asset_id: number;
+  symbol: string;
+  name: string;
 }
 
 export type TxnType = "buy" | "sell";
@@ -65,8 +80,6 @@ export interface Holding {
   unrealizedPct: number | null;
   realizedEUR: number;
   weightPct: number; // share of total portfolio value
-  dayChangePct: number | null;
-  dayChangeEUR: number | null;
   sinceFirstBuy: ReturnStats | null;
   sinceLastBuy: ReturnStats | null;
   firstBuyDate: string | null;
@@ -81,7 +94,6 @@ export interface PortfolioSummary {
   totalUnrealizedEUR: number;
   totalRealizedEUR: number;
   totalInvestedEUR: number; // cumulative money put in (cost of current holdings)
-  dayChangeEUR: number | null;
   holdings: Holding[];
   quotesAsOf: string | null; // ISO timestamp of oldest quote used
   staleQuotes: string[]; // symbols whose quote fetch failed (using cache)

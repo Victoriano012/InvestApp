@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
-import type { Asset, Category, Txn } from "./types";
+import type { Asset, BasketComponent, Category, Txn } from "./types";
 
 let _db: Database.Database | null = null;
 
@@ -17,6 +17,27 @@ const SEED: { symbol: string; name: string; category: Category; currency: string
   { symbol: "CEPU", name: "Central Puerto", category: "arg_stock", currency: "USD" },
   { symbol: "GC=F", name: "Gold (oz t)", category: "gold", currency: "USD" },
   { symbol: "BTC-EUR", name: "Bitcoin", category: "crypto", currency: "EUR" },
+];
+
+// Best-guess composition of Vesto's "Colección Argentina" (equal parts per buy).
+// Not published by Vesto — edit the list on the Activity page to match the app.
+const COLECCION_ARGENTINA: { symbol: string; name: string }[] = [
+  { symbol: "MELI", name: "MercadoLibre" },
+  { symbol: "GLOB", name: "Globant" },
+  { symbol: "YPF", name: "YPF" },
+  { symbol: "GGAL", name: "Grupo Financiero Galicia" },
+  { symbol: "BMA", name: "Banco Macro" },
+  { symbol: "SUPV", name: "Grupo Supervielle" },
+  { symbol: "PAM", name: "Pampa Energía" },
+  { symbol: "CEPU", name: "Central Puerto" },
+  { symbol: "EDN", name: "Edenor" },
+  { symbol: "TGS", name: "Transportadora de Gas del Sur" },
+  { symbol: "TEO", name: "Telecom Argentina" },
+  { symbol: "CRESY", name: "Cresud" },
+  { symbol: "IRS", name: "IRSA" },
+  { symbol: "LOMA", name: "Loma Negra" },
+  { symbol: "AGRO", name: "Adecoagro" },
+  { symbol: "VIST", name: "Vista Energy" },
 ];
 
 export function db(): Database.Database {
@@ -61,13 +82,39 @@ export function db(): Database.Database {
       fetched_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS basket_components (
+      id INTEGER PRIMARY KEY,
+      asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+      symbol TEXT NOT NULL,
+      name TEXT NOT NULL,
+      UNIQUE (asset_id, symbol)
+    );
   `);
+  const cols = _db.prepare("PRAGMA table_info(assets)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "kind")) {
+    _db.exec("ALTER TABLE assets ADD COLUMN kind TEXT NOT NULL DEFAULT 'single'");
+  }
   const count = (_db.prepare("SELECT COUNT(*) AS n FROM assets").get() as { n: number }).n;
   if (count === 0) {
     const ins = _db.prepare(
       "INSERT INTO assets (symbol, name, category, currency, sort) VALUES (?, ?, ?, ?, ?)"
     );
     SEED.forEach((a, i) => ins.run(a.symbol, a.name, a.category, a.currency, i));
+  }
+  const seeded = _db.prepare("SELECT value FROM meta WHERE key = 'seed:coleccion-argentina'").get();
+  if (!seeded) {
+    const maxSort =
+      (_db.prepare("SELECT MAX(sort) AS m FROM assets").get() as { m: number | null }).m ?? 0;
+    const r = _db
+      .prepare(
+        "INSERT INTO assets (symbol, name, category, currency, sort, kind) VALUES (?, ?, ?, ?, ?, 'basket')"
+      )
+      .run("BASKET:COLECCION-ARGENTINA", "Colección Argentina", "arg_stock", "EUR", maxSort + 1);
+    const insC = _db.prepare(
+      "INSERT INTO basket_components (asset_id, symbol, name) VALUES (?, ?, ?)"
+    );
+    for (const c of COLECCION_ARGENTINA) insC.run(r.lastInsertRowid, c.symbol, c.name);
+    _db.prepare("INSERT INTO meta (key, value) VALUES ('seed:coleccion-argentina', '1')").run();
   }
   return _db;
 }
@@ -84,12 +131,12 @@ export function getAsset(id: number): Asset | undefined {
   return db().prepare("SELECT * FROM assets WHERE id = ?").get(id) as Asset | undefined;
 }
 
-export function createAsset(a: Omit<Asset, "id" | "sort">): Asset {
+export function createAsset(a: Omit<Asset, "id" | "sort" | "kind"> & { kind?: Asset["kind"] }): Asset {
   const maxSort =
     (db().prepare("SELECT MAX(sort) AS m FROM assets").get() as { m: number | null }).m ?? 0;
   const r = db()
-    .prepare("INSERT INTO assets (symbol, name, category, currency, sort) VALUES (?, ?, ?, ?, ?)")
-    .run(a.symbol, a.name, a.category, a.currency, maxSort + 1);
+    .prepare("INSERT INTO assets (symbol, name, category, currency, sort, kind) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(a.symbol, a.name, a.category, a.currency, maxSort + 1, a.kind ?? "single");
   return getAsset(Number(r.lastInsertRowid))!;
 }
 
@@ -105,6 +152,29 @@ export function updateAsset(id: number, patch: Partial<Omit<Asset, "id">>): Asse
 
 export function deleteAsset(id: number): void {
   db().prepare("DELETE FROM assets WHERE id = ?").run(id);
+}
+
+// ---- basket components ----
+
+export function listBasketComponents(assetId: number): BasketComponent[] {
+  return db()
+    .prepare("SELECT * FROM basket_components WHERE asset_id = ? ORDER BY name, id")
+    .all(assetId) as BasketComponent[];
+}
+
+export function addBasketComponent(assetId: number, symbol: string, name: string): BasketComponent {
+  db()
+    .prepare(
+      "INSERT INTO basket_components (asset_id, symbol, name) VALUES (?, ?, ?) ON CONFLICT(asset_id, symbol) DO UPDATE SET name = excluded.name"
+    )
+    .run(assetId, symbol, name);
+  return db()
+    .prepare("SELECT * FROM basket_components WHERE asset_id = ? AND symbol = ?")
+    .get(assetId, symbol) as BasketComponent;
+}
+
+export function removeBasketComponent(assetId: number, symbol: string): void {
+  db().prepare("DELETE FROM basket_components WHERE asset_id = ? AND symbol = ?").run(assetId, symbol);
 }
 
 // ---- transactions ----
