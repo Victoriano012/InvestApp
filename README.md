@@ -20,18 +20,32 @@ Back that file up and you've backed up everything.
 ## Pages
 
 - **Portfolio** — total value, unrealized/realized P&L, and per-asset
-  annualized returns since your first and since your most recent buy.
-  Click an asset for per-lot stats (mean monthly / annualized return for
-  every individual purchase). The €/% button toggles absolute vs relative
-  numbers everywhere.
-- **Charts** — customizable line chart: any subset of assets, metric
-  (price %, price, holding value, gain € / gain %), accumulated vs
-  per-period wins, one-line-per-buy mode, ✕ marks or vertical lines at your
-  trades, rebase to range start or first buy, native currency, log scale,
-  and a data-table view.
-- **Capital** — stacked chart of invested capital split by category
-  (ETFs / US stocks / Argentine stocks / gold / Bitcoin), in % or €.
-  Vertical black lines mark transactions; tap one for the details.
+  annualized returns since your first and since your most recent buy (the
+  buy date shown small next to each). Sortable by value, invested, gain,
+  category, or buy dates (persisted). Click an asset for per-lot stats
+  (mean monthly / annualized return for every individual purchase). The €/%
+  button toggles absolute vs relative numbers everywhere.
+- **Charts** — customizable line chart: any subset of assets (per-group
+  select-all/none buttons), metric (price %, holding value, gain € / gain %),
+  accumulated vs per-period wins, one-line-per-buy mode, ✕ marks or vertical
+  lines at your trades, rebase to range start or first buy, native currency,
+  log scale, and a data-table view. Gain metrics start at 0 at the left edge
+  of the visible range and draw nothing before an asset's first buy.
+  Hovering bolds the nearest line.
+- **Capital** — stacked chart of the market value you hold, split by
+  category (ETFs / US stocks / Argentine stocks / gold / Bitcoin) or by
+  individual asset (shades of the category color), in % or €. Group filter
+  chips show any subset of categories. Vertical lines mark transactions,
+  with a darker segment over the stack band of what was traded; hovering
+  near one lists that day's transactions, tap for full details. The hover
+  list bolds whichever band the cursor is inside.
+
+Both charts share a range control: presets (1M…All), start/end calendar
+pickers where transaction dates carry a dot (hover it for the transactions,
+click the header to jump by year/month), drag-to-zoom directly on the
+x-axis via the brush underneath, and a one-press "Prev range" that returns
+to the last range you set explicitly. Axis labels switch from months to
+days once month labels would repeat.
 - **Activity** — add/edit/delete transactions, and manage assets
   (add any instrument via Yahoo search by ticker, ISIN, or name).
   Transactions are entered **by money, not quantity**: type what you paid

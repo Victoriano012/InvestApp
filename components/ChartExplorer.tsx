@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
+  Brush,
   CartesianGrid,
   Line,
   LineChart,
@@ -14,30 +15,20 @@ import {
   YAxis,
 } from "recharts";
 import { useDark, useJson } from "./hooks";
-import { addDays, fmtDate, fmtDateShort, fmtEUR, fmtPct, todayISO } from "@/lib/format";
+import RangeControl, { rangeWindow, type RangeSel } from "./RangeControl";
+import { axisDateFmt, daysBetween, fmtDate, fmtEUR, fmtPct, todayISO } from "@/lib/format";
 import { categoryColor, chrome, dashFor } from "@/lib/palette";
 import { CATEGORIES, type ExplorerAsset, type ExplorerData } from "@/lib/types";
 
-type Metric = "price_pct" | "price" | "value" | "gain_abs" | "gain_pct";
-type Range = "1m" | "3m" | "6m" | "ytd" | "1y" | "all";
+type Metric = "price_pct" | "value" | "gain_abs" | "gain_pct";
 type Interval = "day" | "week" | "month";
 type Markers = "x" | "lines" | "none";
 
 const METRICS: { key: Metric; label: string; pct: boolean; title: string }[] = [
   { key: "price_pct", label: "Price %", pct: true, title: "Price change in % (pick the baseline with 'Rebase')" },
-  { key: "price", label: "Price", pct: false, title: "Raw price" },
   { key: "value", label: "Value €", pct: false, title: "Value of your holding (quantity × price)" },
   { key: "gain_abs", label: "Gain €", pct: false, title: "Profit/loss in € vs what you paid (incl. realized)" },
   { key: "gain_pct", label: "Gain %", pct: true, title: "Unrealized profit in % of cost basis" },
-];
-
-const RANGES: { key: Range; label: string }[] = [
-  { key: "1m", label: "1M" },
-  { key: "3m", label: "3M" },
-  { key: "6m", label: "6M" },
-  { key: "ytd", label: "YTD" },
-  { key: "1y", label: "1Y" },
-  { key: "all", label: "All" },
 ];
 
 interface SeriesDef {
@@ -56,7 +47,12 @@ export default function ChartExplorer() {
 
   const [selected, setSelected] = useState<number[] | null>(null);
   const [metric, setMetric] = useState<Metric>("price_pct");
-  const [range, setRange] = useState<Range>("1y");
+  const [rangeSel, setRangeSel] = useState<RangeSel>({ preset: "1y", from: "", to: "" });
+  const [prevSel, setPrevSel] = useState<RangeSel | null>(null);
+  const brushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Last range set explicitly (presets/calendar) — what "Prev range" returns
+  // to, so consecutive brush zooms don't overwrite it.
+  const manualSel = useRef<RangeSel>({ preset: "1y", from: "", to: "" });
   const [cumulative, setCumulative] = useState(true);
   const [interval, setInterval] = useState<Interval>("month");
   const [perLot, setPerLot] = useState(false);
@@ -65,6 +61,7 @@ export default function ChartExplorer() {
   const [nativeCcy, setNativeCcy] = useState(false);
   const [logScale, setLogScale] = useState(false);
   const [showTable, setShowTable] = useState(false);
+  const [hoverKey, setHoverKey] = useState<string | null>(null);
 
   const assets = useMemo(() => data?.assets ?? [], [data]);
   const held = useMemo(() => assets.filter((a) => a.txns.length > 0).map((a) => a.id), [assets]);
@@ -82,15 +79,18 @@ export default function ChartExplorer() {
   const metricDef = METRICS.find((m) => m.key === metric)!;
   const lotCapable = metric === "price_pct" || metric === "gain_abs" || metric === "gain_pct";
   const usePerLot = perLot && lotCapable;
-  const priceMetric = metric === "price" || metric === "price_pct";
-  const logCapable = (metric === "price" || metric === "value") && cumulative;
+  const priceMetric = metric === "price_pct";
+  const logCapable = metric === "value" && cumulative;
+
+  const win = rangeWindow(rangeSel, todayISO());
 
   const model = useMemo(() => {
     if (!data) return null;
     return buildModel(data, {
       sel,
       metric,
-      range,
+      from: win.from,
+      to: win.to,
       cumulative,
       interval,
       usePerLot,
@@ -98,12 +98,24 @@ export default function ChartExplorer() {
       nativeCcy,
       dark,
     });
-  }, [data, sel, metric, range, cumulative, interval, usePerLot, rebase, nativeCcy, dark]);
+  }, [data, sel, metric, win.from, win.to, cumulative, interval, usePerLot, rebase, nativeCcy, dark]);
+
+  const txnMarks = useMemo(
+    () =>
+      assets.flatMap((a) =>
+        a.txns.map((t) => ({ date: t.date, label: `${t.type === "buy" ? "Buy" : "Sell"} ${a.name}` }))
+      ),
+    [assets]
+  );
 
   if (error) return <p className="p-6 text-sm text-down">Failed to load chart data: {error}</p>;
   if (!data || !model) return <p className="p-6 text-sm text-muted">Loading charts…</p>;
 
   const { rows, series, trades } = model;
+  const tickFmt = axisDateFmt(
+    rows.length > 1 ? daysBetween(rows[0].date as string, rows[rows.length - 1].date as string) : 0,
+    rows.length
+  );
   const isPct = metricDef.pct || (usePerLot && metric === "price_pct");
   const fmtY = (v: number) => (isPct ? fmtPct(v, false, Math.abs(v) < 0.001 ? 2 : 1) : fmtEUR(v, true));
   const logOk = logCapable && logScale && rows.every((r) => series.every((s) => r[s.key] == null || (r[s.key] as number) > 0));
@@ -111,41 +123,82 @@ export default function ChartExplorer() {
   const toggleAsset = (id: number) =>
     setSelected(sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]);
 
+  // Dragging the brush zooms the x-axis; the zoom commits shortly after the
+  // drag settles and the previous range is kept for the "Prev range" button.
+  const onBrush = (b: { startIndex?: number; endIndex?: number }) => {
+    if (brushTimer.current) clearTimeout(brushTimer.current);
+    const s = b.startIndex ?? 0;
+    const e = b.endIndex ?? rows.length - 1;
+    if (s === 0 && e === rows.length - 1) return;
+    const from = rows[s]?.date as string | undefined;
+    const to = rows[e]?.date as string | undefined;
+    if (!from || !to || from === to) return;
+    brushTimer.current = setTimeout(() => {
+      setPrevSel(manualSel.current);
+      setRangeSel({ preset: "custom", from, to });
+    }, 600);
+  };
+  const setManual = (s: RangeSel) => {
+    setPrevSel(manualSel.current);
+    manualSel.current = s;
+    setRangeSel(s);
+  };
+  const goBack = () => {
+    if (!prevSel) return;
+    setRangeSel(prevSel);
+    setPrevSel(rangeSel);
+  };
+
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold tracking-tight">Charts</h1>
-
       {/* Asset picker */}
       <div className="rounded-lg border border-line bg-surface p-3">
         <div className="mb-2 flex items-center gap-2 text-xs text-muted">
           <span className="font-medium uppercase tracking-wide">Assets</span>
           <button className="rounded border border-line px-1.5 py-0.5" onClick={() => setSelected(assets.map((a) => a.id))}>All</button>
-          <button className="rounded border border-line px-1.5 py-0.5" onClick={() => setSelected(held.length ? held : [])}>Held</button>
           <button className="rounded border border-line px-1.5 py-0.5" onClick={() => setSelected([])}>None</button>
         </div>
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           {CATEGORIES.map((cat) => {
             const inCat = assets.filter((a) => a.category === cat.key);
             if (!inCat.length) return null;
-            return inCat.map((a) => {
-              const on = sel.includes(a.id);
-              const color = categoryColor(a.category, dark);
-              return (
-                <button
-                  key={a.id}
-                  onClick={() => toggleAsset(a.id)}
-                  className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs ${
-                    on ? "border-transparent font-medium" : "border-line text-muted"
-                  }`}
-                  style={on ? { background: color + (dark ? "2e" : "1f"), color } : undefined}
-                >
-                  <svg width="18" height="8" aria-hidden>
-                    <line x1="1" y1="4" x2="17" y2="4" stroke={color} strokeWidth="2" strokeDasharray={dashFor(a.dashIndex)} opacity={on ? 1 : 0.5} />
-                  </svg>
-                  {a.name}
-                </button>
-              );
-            });
+            const ids = inCat.map((a) => a.id);
+            const allOn = ids.every((id) => sel.includes(id));
+            const color = categoryColor(cat.key, dark);
+            return (
+              <span key={cat.key} className="flex flex-wrap items-center gap-1.5">
+                {inCat.length > 1 && (
+                  <button
+                    onClick={() =>
+                      setSelected(allOn ? sel.filter((x) => !ids.includes(x)) : [...new Set([...sel, ...ids])])
+                    }
+                    className={`rounded-md border border-line px-1.5 py-1 text-xs ${allOn ? "font-semibold" : "text-muted"}`}
+                    style={allOn ? { color } : undefined}
+                    title={allOn ? `Deselect all ${cat.label}` : `Select all ${cat.label}`}
+                  >
+                    {cat.label}
+                  </button>
+                )}
+                {inCat.map((a) => {
+                  const on = sel.includes(a.id);
+                  return (
+                    <button
+                      key={a.id}
+                      onClick={() => toggleAsset(a.id)}
+                      className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs ${
+                        on ? "border-transparent font-medium" : "border-line text-muted"
+                      }`}
+                      style={on ? { background: color + (dark ? "2e" : "1f"), color } : undefined}
+                    >
+                      <svg width="18" height="8" aria-hidden>
+                        <line x1="1" y1="4" x2="17" y2="4" stroke={color} strokeWidth="2" strokeDasharray={dashFor(a.dashIndex)} opacity={on ? 1 : 0.5} />
+                      </svg>
+                      {a.name}
+                    </button>
+                  );
+                })}
+              </span>
+            );
           })}
         </div>
       </div>
@@ -153,7 +206,18 @@ export default function ChartExplorer() {
       {/* Options row */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
         <Seg label="Metric" options={METRICS.map((m) => ({ k: m.key, l: m.label, t: m.title }))} value={metric} onChange={(v) => setMetric(v as Metric)} />
-        <Seg label="Range" options={RANGES.map((r) => ({ k: r.key, l: r.label }))} value={range} onChange={(v) => setRange(v as Range)} />
+        <span className="flex items-center gap-1.5">
+          <span className="text-muted">Range</span>
+          <RangeControl
+            sel={rangeSel}
+            onChange={setManual}
+            onBack={goBack}
+            backTo={prevSel}
+            txns={txnMarks}
+            min={data.dates[0]}
+            max={data.dates[data.dates.length - 1]}
+          />
+        </span>
         <Seg
           label="Wins"
           options={[{ k: "cum", l: "Accumulated" }, { k: "per", l: "Per period" }]}
@@ -193,14 +257,14 @@ export default function ChartExplorer() {
         ) : (
           <div className="h-[340px] w-full md:h-[440px]">
             <ResponsiveContainer>
-              <LineChart data={rows} margin={{ top: 10, right: 12, bottom: 0, left: 4 }}>
+              <LineChart data={rows} margin={{ top: 10, right: 12, bottom: 0, left: 4 }} onMouseLeave={() => setHoverKey(null)}>
                 <CartesianGrid stroke={C.grid} strokeWidth={1} vertical={false} />
                 <XAxis
                   dataKey="date"
                   tick={{ fill: C.muted, fontSize: 11 }}
                   tickLine={false}
                   axisLine={{ stroke: C.axis }}
-                  tickFormatter={(d: string) => fmtDateShort(d)}
+                  tickFormatter={tickFmt}
                   minTickGap={40}
                 />
                 <YAxis
@@ -216,6 +280,7 @@ export default function ChartExplorer() {
                 <Tooltip
                   content={<ChartTip fmtY={fmtY} chromeC={C} />}
                   cursor={{ stroke: C.muted, strokeWidth: 1, strokeDasharray: "3 3" }}
+                  isAnimationActive={false}
                 />
                 {cumulative && markers === "lines" &&
                   trades.map((t) => (
@@ -227,12 +292,30 @@ export default function ChartExplorer() {
                     dataKey={s.key}
                     name={s.label}
                     stroke={s.color}
-                    strokeWidth={2}
+                    strokeWidth={hoverKey === s.key ? 3.5 : 2}
+                    strokeOpacity={hoverKey && hoverKey !== s.key ? 0.45 : 1}
                     strokeDasharray={s.dash}
                     dot={false}
                     activeDot={{ r: 4, strokeWidth: 2, stroke: C.surface }}
                     connectNulls={false}
                     isAnimationActive={false}
+                  />
+                ))}
+                {/* Invisible wide strokes on top: hovering near a line bolds it. */}
+                {series.map((s) => (
+                  <Line
+                    key={`hit-${s.key}`}
+                    dataKey={s.key}
+                    stroke="transparent"
+                    strokeWidth={13}
+                    dot={false}
+                    activeDot={false}
+                    connectNulls={false}
+                    isAnimationActive={false}
+                    legendType="none"
+                    tooltipType="none"
+                    onMouseMove={() => setHoverKey(s.key)}
+                    onMouseLeave={() => setHoverKey(null)}
                   />
                 ))}
                 {cumulative && markers === "x" &&
@@ -246,6 +329,16 @@ export default function ChartExplorer() {
                       />
                     ) : null
                   )}
+                <Brush
+                  key={`${rows.length}:${rows[0]?.date ?? ""}:${rows[rows.length - 1]?.date ?? ""}`}
+                  dataKey="date"
+                  height={22}
+                  travellerWidth={8}
+                  stroke={C.axis}
+                  fill={C.surface}
+                  tickFormatter={(d: string) => tickFmt(String(d))}
+                  onChange={onBrush}
+                />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -378,7 +471,10 @@ function ChartTip({
   chromeC: ReturnType<typeof chrome>;
 }) {
   if (!active || !payload?.length) return null;
-  const items = [...payload].filter((p) => p.value != null).sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+  // Transparent strokes are the hover-hit helpers, not real series.
+  const items = [...payload]
+    .filter((p) => p.value != null && p.color !== "transparent")
+    .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
   return (
     <div
       className="rounded-md border px-2.5 py-2 text-xs shadow-sm"
@@ -403,7 +499,8 @@ function ChartTip({
 interface ModelOpts {
   sel: number[];
   metric: Metric;
-  range: Range;
+  from: string;
+  to: string;
   cumulative: boolean;
   interval: Interval;
   usePerLot: boolean;
@@ -418,17 +515,6 @@ interface TradeMark {
   type: "buy" | "sell";
   seriesKey: string;
   y: number | null;
-}
-
-function rangeStart(range: Range, today: string): string {
-  switch (range) {
-    case "1m": return addDays(today, -31);
-    case "3m": return addDays(today, -92);
-    case "6m": return addDays(today, -183);
-    case "1y": return addDays(today, -366);
-    case "ytd": return today.slice(0, 4) + "-01-01";
-    case "all": return "0000-00-00";
-  }
 }
 
 function binKey(date: string, interval: Interval): string {
@@ -446,28 +532,40 @@ function binKey(date: string, interval: Interval): string {
 }
 
 function buildModel(data: ExplorerData, o: ModelOpts) {
-  const today = todayISO();
-  const from = rangeStart(o.range, today);
-  let i0 = data.dates.findIndex((d) => d >= from);
+  let i0 = data.dates.findIndex((d) => d >= o.from);
   if (i0 < 0) i0 = 0;
-  const dates = data.dates.slice(i0);
+  let i1 = data.dates.length - 1;
+  while (i1 > i0 && data.dates[i1] > o.to) i1--;
+  const dates = data.dates.slice(i0, i1 + 1);
 
   const chosen = data.assets.filter((a) => o.sel.includes(a.id));
   const series: SeriesDef[] = [];
   const raw: (number | null)[][] = [];
 
-  const priceOf = (a: ExplorerAsset) => (o.nativeCcy && (o.metric === "price" || o.metric === "price_pct") ? a.priceNative : a.priceEUR);
+  const priceOf = (a: ExplorerAsset) => (o.nativeCcy && o.metric === "price_pct" ? a.priceNative : a.priceEUR);
 
   for (const a of chosen) {
     const color = categoryColor(a.category, o.dark);
     if (o.usePerLot) {
       a.lots.forEach((lot, li) => {
-        const vals = dates.map((d, i) => {
-          if (d < lot.date) return null;
-          const p = a.priceEUR[i0 + i];
+        const lotVal = (j: number): number | null => {
+          if (data.dates[j] < lot.date) return null;
+          const p = a.priceEUR[j];
           if (p == null) return null;
           if (o.metric === "gain_abs") return (p - lot.priceEUR) * lot.quantity;
           return p / lot.priceEUR - 1; // price_pct & gain_pct per lot are the same thing
+        };
+        // Gain metrics count from the window start, not from the buy.
+        let base = 0;
+        if (o.metric === "gain_abs" || o.metric === "gain_pct") {
+          for (let j = i0 - 1; j >= 0; j--) {
+            const v = lotVal(j);
+            if (v != null) { base = v; break; }
+          }
+        }
+        const vals = dates.map((_, i) => {
+          const v = lotVal(i0 + i);
+          return v != null ? v - base : null;
         });
         series.push({
           key: `a${a.id}l${lot.txnId}`,
@@ -482,10 +580,7 @@ function buildModel(data: ExplorerData, o: ModelOpts) {
     }
 
     let vals: (number | null)[];
-    if (o.metric === "price") {
-      const p = priceOf(a);
-      vals = dates.map((_, i) => p[i0 + i]);
-    } else if (o.metric === "price_pct") {
+    if (o.metric === "price_pct") {
       const p = priceOf(a);
       let baseIdx = i0;
       if (o.rebase === "firstbuy" && a.lots.length) {
@@ -503,17 +598,41 @@ function buildModel(data: ExplorerData, o: ModelOpts) {
     } else if (o.metric === "value") {
       vals = dates.map((_, i) => a.valueEUR[i0 + i]);
     } else if (o.metric === "gain_abs") {
-      vals = dates.map((_, i) => {
-        const v = a.valueEUR[i0 + i];
-        const c = a.costEUR[i0 + i];
-        const r = a.realizedEUR[i0 + i];
+      // No line before the asset's first transaction — a flat 0 there is noise.
+      const firstTxn = a.txns.reduce<string | null>((m, t) => (m == null || t.date < m ? t.date : m), null);
+      const gainAt = (j: number): number | null => {
+        const v = a.valueEUR[j];
+        const c = a.costEUR[j];
+        const r = a.realizedEUR[j];
         return v != null && c != null ? v - c + (r ?? 0) : null;
+      };
+      // Count gains from the window start: rebase by what was accumulated before it.
+      let base = 0;
+      for (let j = i0 - 1; j >= 0; j--) {
+        if (firstTxn == null || data.dates[j] < firstTxn) break;
+        const g = gainAt(j);
+        if (g != null) { base = g; break; }
+      }
+      vals = dates.map((d, i) => {
+        if (firstTxn == null || d < firstTxn) return null;
+        const g = gainAt(i0 + i);
+        return g != null ? g - base : null;
       });
     } else {
-      vals = dates.map((_, i) => {
-        const v = a.valueEUR[i0 + i];
-        const c = a.costEUR[i0 + i];
+      const pctAt = (j: number): number | null => {
+        const v = a.valueEUR[j];
+        const c = a.costEUR[j];
         return v != null && c != null && c > 0 ? (v - c) / c : null;
+      };
+      // Same window rebase: percentage points gained since the range start.
+      let base = 0;
+      for (let j = i0 - 1; j >= 0; j--) {
+        const g = pctAt(j);
+        if (g != null) { base = g; break; }
+      }
+      vals = dates.map((_, i) => {
+        const g = pctAt(i0 + i);
+        return g != null ? g - base : null;
       });
     }
     // Value/gain series are meaningless for assets never transacted.
@@ -542,14 +661,13 @@ function buildModel(data: ExplorerData, o: ModelOpts) {
         cur = k;
       } else bins[bins.length - 1].endIdx = i;
     }
-    const ratio = o.metric === "price_pct" || o.metric === "price";
     rows = bins.map((b, bi) => {
       const r: Record<string, string | number | null> = { date: dates[b.endIdx] };
       series.forEach((s, si) => {
         const prevEnd = bi > 0 ? raw[si][bins[bi - 1].endIdx] : raw[si][b.startIdx];
         const end = raw[si][b.endIdx];
         if (prevEnd == null || end == null) r[s.key] = null;
-        else if (ratio && o.metric === "price_pct") {
+        else if (o.metric === "price_pct") {
           // period return needs the underlying ratio: (1+end)/(1+prev) - 1
           r[s.key] = (1 + end) / (1 + prevEnd) - 1;
         } else r[s.key] = end - prevEnd;

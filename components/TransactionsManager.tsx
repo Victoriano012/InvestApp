@@ -203,8 +203,6 @@ export default function TransactionsManager() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold tracking-tight">Activity</h1>
-
       {/* Add / edit form */}
       <div className="rounded-lg border border-line bg-surface p-3 md:p-4">
         <h2 className="mb-3 text-sm font-semibold text-ink2">{form.id ? "Edit transaction" : "Add transaction"}</h2>
