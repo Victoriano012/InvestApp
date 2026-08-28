@@ -40,8 +40,9 @@ export function mixHex(a: string, b: string, t: number): string {
  * Per-asset variant of a category hue: same hue family, stepped lighter/darker
  * so stacked areas of one category stay visibly related but distinguishable.
  * Index = the asset's position within its category (0 = the base hue).
+ * Deviations kept tight so the shades read as one family, not separate colors.
  */
-const SHADE_STEPS = [0, 0.28, -0.22, 0.48, -0.4, 0.64];
+const SHADE_STEPS = [0, 0.14, -0.11, 0.24, -0.2, 0.32];
 
 export function categoryShade(cat: Category, index: number, dark: boolean): string {
   const base = categoryColor(cat, dark);

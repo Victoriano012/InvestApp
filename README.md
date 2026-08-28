@@ -25,30 +25,38 @@ Back that file up and you've backed up everything.
   category, or buy dates (persisted). Click an asset for per-lot stats
   (mean monthly / annualized return for every individual purchase). The €/%
   button toggles absolute vs relative numbers everywhere.
-- **Charts** — customizable line chart: any subset of assets (per-group
-  select-all/none buttons), metric (price %, holding value, gain € / gain %),
-  accumulated vs per-period wins, one-line-per-buy mode, ✕ marks or vertical
-  lines at your trades, rebase to range start or first buy, native currency,
-  log scale, and a data-table view. Gain metrics start at 0 at the left edge
-  of the visible range and draw nothing before an asset's first buy.
-  Hovering bolds the nearest line.
+- **Charts** — customizable line chart: metric (gain €, gain %, or holding
+  value — gain % by default, over the full range), one-line-per-buy mode (each buy keeps the
+  asset's exact line style), and ✕ marks at your trades. The asset picker
+  sits inline below the chart and doubles as the legend: All/None buttons,
+  per-category select-all buttons, and a line-style swatch per asset. Gain
+  metrics start at 0 at the left edge of the visible range and draw nothing
+  before an asset's first buy. Hovering bolds the nearest line; hovering
+  near a trade lists that day's transactions in the tooltip.
 - **Capital** — stacked chart of the market value you hold, split by
-  category (ETFs / US stocks / Argentine stocks / gold / Bitcoin) or by
-  individual asset (shades of the category color), in % or €. Group filter
-  chips show any subset of categories. Vertical lines mark transactions,
+  category (ETFs / Bitcoin / gold / US stocks / Basket) or by
+  individual asset (shades of the category color), in % or € (the €/%
+  toggle sits at the far left of the options row). Group filter
+  chips show any subset of categories (All/None buttons included; an empty
+  selection keeps the block at its full size). Vertical lines mark transactions,
   with a darker segment over the stack band of what was traded; hovering
   near one lists that day's transactions, tap for full details. The hover
   list bolds whichever band the cursor is inside.
 
-Both charts share a range control: presets (1M…All), start/end calendar
-pickers where transaction dates carry a dot (hover it for the transactions,
-click the header to jump by year/month), drag-to-zoom directly on the
-x-axis via the brush underneath, and a one-press "Prev range" that returns
-to the last range you set explicitly. Axis labels switch from months to
-days once month labels would repeat.
-- **Activity** — add/edit/delete transactions, and manage assets
-  (add any instrument via Yahoo search by ticker, ISIN, or name).
-  Transactions are entered **by money, not quantity**: type what you paid
+Both charts share a range control: presets (1M…All) and start/end calendar
+pickers where transaction dates carry a dot in the day, month, and year
+views (hover a day's dot for the transactions, click the header to jump by
+year/month). Zooming happens directly on the plot: drag a region to zoom
+in on it; double-click to reset to the last preset/calendar range you set.
+Axis labels switch from months to days once month labels would repeat. In
+both charts, "All" starts at the first day with anything selected on the
+plot (first buy among selected assets / first capital among selected groups).
+- **Activity** — add/edit/delete transactions, and manage assets: search
+  Yahoo by ticker, ISIN, or name and click a result to add it — the
+  category is inferred from Yahoo's instrument type. Assets can carry an
+  optional short name (✎ on an asset opens an inline name/short-name
+  editor), used in the chart legends, tooltips, and calendar hovers, and,
+  on phones, everywhere in the UI. Transactions are entered **by money, not quantity**: type what you paid
   (or received), pick the currency (defaults to the asset's; EUR↔USD converts
   at that day's rate), and the app derives the quantity from that day's
   closing price. Editing a transaction still exposes the raw
@@ -61,17 +69,20 @@ moment of each buy** (like Vesto's "Colecciones"). Buys are recorded in EUR;
 each buy locks in the component quantities at that day's prices, so per-buy
 returns are exact. Sells consume buys FIFO. The seeded **Colección
 Argentina** ships with a best-guess list of 16 Argentine ADRs — edit it via
-the ☰ button next to the basket on the Activity page (search results there
-also get a "→ add to basket" button), or create new baskets from the same
-page. In charts, a basket appears as an equal-weight index (base 100).
+the ☰ button next to the basket on the Activity page (components are added
+via a search bar inside the editor), or create new baskets from the same
+page (they land in the "Basket" category). In charts, a basket's aggregate line is an equal-weight index
+(base 100); per-buy lines use the buy's exact frozen composition.
 
 ## Notes
 
 - Quotes are cached 5 minutes; daily history 1 hour. If Yahoo is
   unreachable the app falls back to the last cached prices and says so.
-- Gold (XAU): Yahoo has no XAU spot series, so the app uses COMEX
-  front-month futures (`GC=F`) as the closest proxy, quoted per **troy
-  ounce** — Revolut shows grams (1 ozt = 31.1035 g). Bitcoin uses `BTC-EUR` market price;
+- Gold (XAU): Yahoo has no XAU spot series, so the app uses PAX Gold
+  (`PAXG-USD`, a token redeemable for 1 fine troy ounce of vaulted gold)
+  which tracks XAU/USD spot, quoted per **troy ounce** — Revolut shows
+  grams (1 ozt = 31.1035 g). (Previously `GC=F` futures, which carry a
+  small contango premium over spot.) Bitcoin uses `BTC-EUR` market price;
   Revolut's displayed price includes their spread, so expect a small offset.
 - Returns per lot are price-based in EUR, from your actual entry price
   including fees, so currency moves are part of the return. Annualized and

@@ -26,6 +26,110 @@ export interface TxnMark {
   label: string;
 }
 
+/**
+ * W&B-style zoom: press on a date, drag, release on another — that span
+ * becomes the range. Wire start/move/end to the chart's mouse events and
+ * render `drag` as a ReferenceArea while it's set. Mouse-up and mouse-move
+ * are also watched at window level so a drag safely continues beyond the
+ * chart bounds: the selection keeps following the pointer's x position
+ * (mapped to the nearest visible date, clamped to the ends). For that the
+ * chart registers its wrapper element via `containerRef` and its windowed
+ * dates via `setDates(dates)` (a plain ref write — call it in render).
+ *
+ * Clicks and double-clicks are detected by hand from the press events:
+ * the re-render our own mousedown triggers makes recharts replace the
+ * hovered SVG node mid-press, so the browser never synthesizes native
+ * click/dblclick events over the marks.
+ */
+export function useDragZoom(handlers: {
+  onZoom: (from: string, to: string) => void;
+  /** Double-click (two stationary presses within 400ms). */
+  onReset?: () => void;
+  /** Single stationary press-and-release, with the date under the cursor. */
+  onClick?: (date: string) => void;
+}) {
+  // The ref is the source of truth: recharts may call `end` with a handler
+  // closure from before `start`'s re-render, so reading the state there
+  // would see a stale (null) drag and swallow quick clicks.
+  const [drag, setDragState] = useState<{ from: string; to: string } | null>(null);
+  const dragRef = useRef<{ from: string; to: string } | null>(null);
+  const setDrag = (d: { from: string; to: string } | null) => {
+    dragRef.current = d;
+    setDragState(d);
+  };
+  const lastDown = useRef(0);
+  const isDouble = useRef(false);
+  const start = (label?: unknown) => {
+    if (typeof label !== "string") return;
+    const now = Date.now();
+    isDouble.current = now - lastDown.current < 400;
+    lastDown.current = now;
+    setDrag({ from: label, to: label });
+  };
+  const move = (label?: unknown) => {
+    const d = dragRef.current;
+    if (d && typeof label === "string" && label !== d.to) setDrag({ ...d, to: label });
+  };
+  const end = () => {
+    const d = dragRef.current;
+    if (!d) return;
+    setDrag(null);
+    if (d.from !== d.to) {
+      lastDown.current = 0;
+      if (d.from < d.to) handlers.onZoom(d.from, d.to);
+      else handlers.onZoom(d.to, d.from);
+    } else if (isDouble.current) {
+      lastDown.current = 0;
+      isDouble.current = false;
+      handlers.onReset?.();
+    } else {
+      handlers.onClick?.(d.from);
+    }
+  };
+  const endRef = useRef(end);
+  endRef.current = end;
+
+  // Registered by the chart so an in-flight drag can track the mouse outside
+  // the plot: wrapper element + the dates of the rows currently plotted.
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const datesRef = useRef<string[]>([]);
+  const setDates = (dates: string[]) => {
+    datesRef.current = dates;
+  };
+
+  const dragging = drag !== null;
+  useEffect(() => {
+    if (!dragging) return;
+    const onMouseUp = () => endRef.current();
+    // Outside the plot area the selection keeps following the pointer:
+    // map clientX onto the plot's date span (recharts lays the rows out
+    // evenly across it — category point scale), clamped to the ends.
+    const onMouseMove = (e: MouseEvent) => {
+      const el = containerRef.current;
+      const dates = datesRef.current;
+      if (!el || dates.length === 0) return;
+      // The grid's bbox is the plot area (axes and margins excluded).
+      const plot = el.querySelector(".recharts-cartesian-grid") ?? el.querySelector("svg");
+      const rect = plot?.getBoundingClientRect();
+      if (!rect || rect.width <= 0) return;
+      // Inside the plot recharts' own onMouseMove reports activeLabel more
+      // precisely — only take over when the pointer is outside it.
+      if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) return;
+      const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+      move(dates[Math.round(frac * (dates.length - 1))]);
+    };
+    window.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("mousemove", onMouseMove);
+    return () => {
+      window.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("mousemove", onMouseMove);
+    };
+    // `move` only touches refs and the stable state setter — safe to close over.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragging]);
+  return { drag, start, move, end, containerRef, setDates };
+}
+
 function shiftMonth(ym: string, delta: number): string {
   const [y, m] = ym.split("-").map(Number);
   const d = new Date(Date.UTC(y, m - 1 + delta, 1));
@@ -38,6 +142,30 @@ function daysInMonth(ym: string): number {
 }
 
 const WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+
+/** "5 Jan" prefix for lines aggregated across a month or year. */
+function dayPrefix(d: string): string {
+  return new Date(d + "T00:00:00Z").toLocaleDateString("en-IE", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  });
+}
+
+/** Hover tooltip listing a cell's transactions (parent needs `group relative`). */
+function MarkTip({ lines }: { lines: string[] }) {
+  const shown = lines.length > 11 ? lines.slice(0, 10) : lines;
+  return (
+    <span className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-0.5 hidden w-max max-w-[230px] -translate-x-1/2 rounded-md border border-line bg-surface px-2 py-1 text-left text-[11px] leading-relaxed text-ink2 shadow-md group-hover:block">
+      {shown.map((l, j) => (
+        <span key={j} className="block whitespace-nowrap">
+          {l}
+        </span>
+      ))}
+      {shown.length < lines.length && <span className="block text-muted">…and {lines.length - shown.length} more</span>}
+    </span>
+  );
+}
 
 function Calendar({
   value,
@@ -72,6 +200,21 @@ function Calendar({
   const year = Number(month.slice(0, 4));
   const minY = min ? Number(min.slice(0, 4)) : -Infinity;
   const maxY = max ? Number(max.slice(0, 4)) : Infinity;
+  // Year/month cells aggregate their days' transactions, each line prefixed
+  // with the day ("5 Jan — Buy X"), for the same hover tooltip the days get.
+  const [txnYears, txnMonths] = useMemo(() => {
+    const years = new Map<string, string[]>();
+    const months = new Map<string, string[]>();
+    for (const d of [...txnMap.keys()].sort()) {
+      const lines = txnMap.get(d)!.map((l) => `${dayPrefix(d)} — ${l}`);
+      for (const [m, key] of [[years, d.slice(0, 4)], [months, d.slice(0, 7)]] as const) {
+        const arr = m.get(key);
+        if (arr) arr.push(...lines);
+        else m.set(key, [...lines]);
+      }
+    }
+    return [years, months];
+  }, [txnMap]);
 
   if (view === "years") {
     const start = year - ((year % 12) + 12) % 12;
@@ -99,25 +242,37 @@ function Calendar({
           </button>
         </div>
         <div className="grid grid-cols-4 gap-1">
-          {Array.from({ length: 12 }, (_, i) => start + i).map((y) => (
-            <button
-              key={y}
-              disabled={y < minY || y > maxY}
-              onClick={() => {
-                setMonth(`${y}-${month.slice(5)}`);
-                setView("months");
-              }}
-              className={`rounded-md py-1.5 text-xs tabular-nums ${
-                y === year
-                  ? "bg-accent font-semibold text-white"
-                  : y < minY || y > maxY
-                    ? "text-muted/40"
-                    : "text-ink2 hover:bg-accent/10"
-              }`}
-            >
-              {y}
-            </button>
-          ))}
+          {Array.from({ length: 12 }, (_, i) => start + i).map((y) => {
+            const marks = txnYears.get(String(y));
+            return (
+              <span key={y} className="group relative">
+                <button
+                  disabled={y < minY || y > maxY}
+                  onClick={() => {
+                    setMonth(`${y}-${month.slice(5)}`);
+                    setView("months");
+                  }}
+                  className={`relative w-full rounded-md py-1.5 text-xs tabular-nums ${
+                    y === year
+                      ? "bg-accent font-semibold text-white"
+                      : y < minY || y > maxY
+                        ? "text-muted/40"
+                        : "text-ink2 hover:bg-accent/10"
+                  }`}
+                >
+                  {y}
+                  {marks && (
+                    <span
+                      className={`absolute bottom-[1px] left-1/2 h-[5px] w-[5px] -translate-x-1/2 rounded-full ${
+                        y === year ? "bg-white" : "bg-accent"
+                      }`}
+                    />
+                  )}
+                </button>
+                {marks && <MarkTip lines={marks} />}
+              </span>
+            );
+          })}
         </div>
       </div>
     );
@@ -151,20 +306,30 @@ function Calendar({
           {Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, "0")}`).map((ym) => {
             const off = (!!min && ym < min.slice(0, 7)) || (!!max && ym > max.slice(0, 7));
             const name = new Date(ym + "-01T00:00:00Z").toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" });
+            const marks = txnMonths.get(ym);
             return (
-              <button
-                key={ym}
-                disabled={off}
-                onClick={() => {
-                  setMonth(ym);
-                  setView("days");
-                }}
-                className={`rounded-md py-1.5 text-xs ${
-                  ym === month ? "bg-accent font-semibold text-white" : off ? "text-muted/40" : "text-ink2 hover:bg-accent/10"
-                }`}
-              >
-                {name}
-              </button>
+              <span key={ym} className="group relative">
+                <button
+                  disabled={off}
+                  onClick={() => {
+                    setMonth(ym);
+                    setView("days");
+                  }}
+                  className={`relative w-full rounded-md py-1.5 text-xs ${
+                    ym === month ? "bg-accent font-semibold text-white" : off ? "text-muted/40" : "text-ink2 hover:bg-accent/10"
+                  }`}
+                >
+                  {name}
+                  {marks && (
+                    <span
+                      className={`absolute bottom-[1px] left-1/2 h-[5px] w-[5px] -translate-x-1/2 rounded-full ${
+                        ym === month ? "bg-white" : "bg-accent"
+                      }`}
+                    />
+                  )}
+                </button>
+                {marks && <MarkTip lines={marks} />}
+              </span>
             );
           })}
         </div>
@@ -232,22 +397,10 @@ function Calendar({
                   />
                 )}
               </button>
-              {marks && (
-                <span className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-0.5 hidden w-max max-w-[230px] -translate-x-1/2 rounded-md border border-line bg-surface px-2 py-1 text-left text-[11px] leading-relaxed text-ink2 shadow-md group-hover:block">
-                  {marks.map((l, j) => (
-                    <span key={j} className="block whitespace-nowrap">
-                      {l}
-                    </span>
-                  ))}
-                </span>
-              )}
+              {marks && <MarkTip lines={marks} />}
             </span>
           );
         })}
-      </div>
-      <div className="mt-1.5 flex items-center gap-1.5 border-t border-line pt-1.5 text-[10px] text-muted">
-        <span className="h-[5px] w-[5px] rounded-full bg-accent" /> transaction — hover the dot for
-        details
       </div>
     </div>
   );
@@ -287,7 +440,7 @@ function DateField({
       <button
         onClick={() => setOpen(!open)}
         title={title}
-        className="rounded-md border border-line bg-surface px-2 py-1 tabular-nums text-ink2 hover:border-accent/50"
+        className="rounded-md border border-line bg-surface px-2.5 py-1 tabular-nums text-ink2 hover:border-accent/50"
       >
         {value ? fmtDate(value) : "…"}
       </button>
@@ -315,31 +468,31 @@ function DateField({
 }
 
 /**
- * Range picker shared by the Charts and Capital pages: presets, custom
+ * Range picker shared by the Charts and Capital pages: presets, plus custom
  * from/to dates via a calendar popover that marks transaction dates with a
- * dot (hover shows the transactions), and a one-press return to the last
- * manually set range after a brush zoom.
+ * dot (hover shows the transactions).
  */
 export default function RangeControl({
   sel,
   onChange,
-  onBack,
-  backTo,
   txns,
   min,
   max,
+  windowFrom,
 }: {
   sel: RangeSel;
   onChange: (s: RangeSel) => void;
-  onBack?: () => void;
-  backTo?: RangeSel | null;
   txns: TxnMark[];
   min?: string;
   max?: string;
+  /** Effective start of the rendered window when it's later than the preset's
+   *  (e.g. "All" clamped to the selected assets' first buy) — display only. */
+  windowFrom?: string;
 }) {
   const today = todayISO();
   const win = rangeWindow(sel, today);
-  const showFrom = sel.preset === "custom" ? sel.from : min && win.from < min ? min : win.from;
+  let showFrom = sel.preset === "custom" ? sel.from : min && win.from < min ? min : win.from;
+  if (sel.preset !== "custom" && windowFrom && windowFrom > showFrom) showFrom = windowFrom;
   const showTo = sel.preset === "custom" ? sel.to : max && max < win.to ? max : win.to;
 
   const txnMap = useMemo(() => {
@@ -355,13 +508,13 @@ export default function RangeControl({
   const custom = (from: string, to: string) => onChange({ preset: "custom", from, to });
 
   return (
-    <span className="flex flex-wrap items-center gap-1.5 text-xs">
+    <span className="flex flex-wrap items-center gap-1.5 text-sm">
       <span className="inline-flex overflow-hidden rounded-md border border-line">
         {RANGE_OPTIONS.map((r) => (
           <button
             key={r.key}
             onClick={() => onChange({ preset: r.key, from: "", to: "" })}
-            className={`px-2 py-1 ${sel.preset === r.key ? "bg-accent/15 font-semibold text-accent" : "text-muted hover:text-ink2"}`}
+            className={`px-2.5 py-1 ${sel.preset === r.key ? "bg-accent/15 font-semibold text-accent" : "bg-surface text-muted hover:text-ink2"}`}
           >
             {r.label}
           </button>
@@ -386,15 +539,6 @@ export default function RangeControl({
         title="End date — transaction dates are dotted on the calendar"
         align="right"
       />
-      {backTo && onBack && (
-        <button
-          onClick={onBack}
-          className="rounded-md border border-line px-2 py-1 text-muted hover:text-ink2"
-          title={`Back to ${backTo.preset === "custom" ? `${backTo.from || "start"} → ${backTo.to || "today"}` : backTo.preset.toUpperCase()}`}
-        >
-          ↩ Prev range
-        </button>
-      )}
     </span>
   );
 }

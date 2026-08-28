@@ -4,18 +4,20 @@ import { useMemo, useRef, useState } from "react";
 import {
   Area,
   AreaChart,
-  Brush,
   CartesianGrid,
+  Dot,
+  ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
   useYAxisInverseScale,
+  type ActiveDotProps,
 } from "recharts";
 import { useDark, useJson, useValueMode } from "./hooks";
 import ModeToggle from "./ModeToggle";
-import RangeControl, { rangeWindow, type RangeSel } from "./RangeControl";
+import RangeControl, { rangeWindow, useDragZoom, type RangeSel } from "./RangeControl";
 import { axisDateFmt, daysBetween, fmtDate, fmtEUR, fmtMoney, fmtNum, fmtPct, todayISO } from "@/lib/format";
 import { categoryColor, categoryShade, chrome, mixHex } from "@/lib/palette";
 import { CATEGORIES, type CapitalData, type Category } from "@/lib/types";
@@ -33,15 +35,40 @@ export default function CapitalChart() {
   const [mode, toggleMode] = useValueMode();
   const [grouping, setGrouping] = useState<Grouping>("category");
   const [sel, setSel] = useState<RangeSel>({ preset: "all", from: "", to: "" });
-  const [prevSel, setPrevSel] = useState<RangeSel | null>(null);
-  const brushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Last range set explicitly (presets/calendar) — what "Prev range" returns
-  // to, so consecutive brush zooms don't overwrite it.
+  // Last range set explicitly (presets/calendar) — what a double-click
+  // returns to, so consecutive drag zooms don't overwrite it.
   const manualSel = useRef<RangeSel>({ preset: "all", from: "", to: "" });
   const dark = useDark();
   const C = chrome(dark);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [cats, setCats] = useState<Category[] | null>(null); // null = all groups
+
+  // Short asset names wherever set — tooltips, panels and calendars are tight on space.
+  const nameFor = useMemo(() => {
+    const m = new Map((data?.assets ?? []).map((a) => [a.id, a.short_name]));
+    return (id: number, full: string) => m.get(id) || full;
+  }, [data]);
+
+  // W&B-style zoom: press on a date, drag, release on another — that span
+  // becomes the range. Double-click returns to the range picked at the top;
+  // a plain click selects the nearest transaction date (±5 days).
+  const zoom = useDragZoom({
+    onZoom: (from, to) => setSel({ preset: "custom", from, to }),
+    onReset: () => setSel(manualSel.current),
+    onClick: (label) => {
+      const clicked = Date.parse(label);
+      let best: string | null = null;
+      let bestDist = 5 * 86400000 + 1;
+      for (const t of model?.catTxnDates ?? []) {
+        const dist = Math.abs(Date.parse(t.date) - clicked);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = t.date;
+        }
+      }
+      setSelectedDate((cur) => (best === cur ? null : best));
+    },
+  });
 
   const pct = mode === "pct";
   const catOn = (k: Category) => !cats || cats.includes(k);
@@ -51,10 +78,10 @@ export default function CapitalChart() {
       (data?.txnDates ?? []).flatMap((t) =>
         t.txns.map((x) => ({
           date: t.date,
-          label: `${x.type === "buy" ? "Buy" : "Sell"} ${x.assetName} · ${fmtEUR(x.amountEUR)}`,
+          label: `${x.type === "buy" ? "Buy" : "Sell"} ${nameFor(x.assetId, x.assetName)} · ${fmtEUR(x.amountEUR)}`,
         }))
       ),
-    [data]
+    [data, nameFor]
   );
 
   const model = useMemo(() => {
@@ -86,7 +113,7 @@ export default function CapitalChart() {
         const shade = seen.get(a.category) ?? 0;
         seen.set(a.category, shade + 1);
         if (!active(a.category)) continue; // shade index stays stable even when filtered out
-        series.push({ key: `a${a.id}`, label: a.name, color: categoryShade(a.category, shade, dark) });
+        series.push({ key: `a${a.id}`, label: a.short_name || a.name, color: categoryShade(a.category, shade, dark) });
         byId.set(`a${a.id}`, vals);
       }
       valuesOf = (key) => byId.get(key)!;
@@ -98,7 +125,18 @@ export default function CapitalChart() {
       .filter((t) => t.txns.length > 0);
 
     const win = rangeWindow(sel, todayISO());
-    let i0 = data.dates.findIndex((d) => d >= win.from);
+    // "All" spans the visible groups' history (first day any of them has
+    // capital), not the whole dataset's.
+    let winFrom = win.from;
+    if (sel.preset === "all") {
+      let first: string | null = null;
+      for (const s of series) {
+        const idx = valuesOf(s.key).findIndex((v) => v > 0);
+        if (idx >= 0 && (first == null || data.dates[idx] < first)) first = data.dates[idx];
+      }
+      if (first) winFrom = first;
+    }
+    let i0 = data.dates.findIndex((d) => d >= winFrom);
     if (i0 < 0) i0 = 0;
     let i1 = data.dates.length - 1;
     while (i1 > i0 && data.dates[i1] > win.to) i1--;
@@ -116,7 +154,7 @@ export default function CapitalChart() {
     const first = (rows[0]?.date as string) ?? "9999";
     const last = (rows[rows.length - 1]?.date as string) ?? "0000";
     const visibleTxnDates = catTxnDates.filter((t) => t.date >= first && t.date <= last);
-    return { rows, series, catTxnDates, visibleTxnDates };
+    return { rows, series, catTxnDates, visibleTxnDates, winFrom };
   }, [data, grouping, sel, cats, dark]);
 
   if (error) return <p className="p-6 text-sm text-down">Failed to load: {error}</p>;
@@ -131,6 +169,8 @@ export default function CapitalChart() {
     );
 
   const { rows, series, catTxnDates, visibleTxnDates } = model;
+  // Lets an in-flight drag-zoom keep following the mouse outside the plot.
+  zoom.setDates(rows.map((r) => r.date as string));
   const tickFmt = axisDateFmt(
     rows.length > 1 ? daysBetween(rows[0].date as string, rows[rows.length - 1].date as string) : 0,
     rows.length
@@ -142,34 +182,12 @@ export default function CapitalChart() {
     const cur = new Set(cats ?? presentCats.map((c) => c.key));
     if (cur.has(k)) cur.delete(k);
     else cur.add(k);
-    if (cur.size === 0) return; // at least one group stays on
     setCats(cur.size === presentCats.length ? null : [...cur]);
   };
 
-  // Dragging the brush zooms the x-axis; the zoom commits shortly after the
-  // drag settles and the previous range is kept for the "Prev range" button.
-  const onBrush = (b: { startIndex?: number; endIndex?: number }) => {
-    if (brushTimer.current) clearTimeout(brushTimer.current);
-    const s = b.startIndex ?? 0;
-    const e = b.endIndex ?? rows.length - 1;
-    if (s === 0 && e === rows.length - 1) return;
-    const from = rows[s]?.date as string | undefined;
-    const to = rows[e]?.date as string | undefined;
-    if (!from || !to || from === to) return;
-    brushTimer.current = setTimeout(() => {
-      setPrevSel(manualSel.current);
-      setSel({ preset: "custom", from, to });
-    }, 600);
-  };
   const setManual = (s: RangeSel) => {
-    setPrevSel(manualSel.current);
     manualSel.current = s;
     setSel(s);
-  };
-  const goBack = () => {
-    if (!prevSel) return;
-    setSel(prevSel);
-    setPrevSel(sel);
   };
 
   // For each transaction, a colored segment on its marker line spanning the
@@ -203,31 +221,11 @@ export default function CapitalChart() {
     }
   }
 
-  // A click anywhere near a marker line selects the nearest transaction date (±5 days).
-  const onChartClick = (e: { activeLabel?: string | number } | null) => {
-    const label = e?.activeLabel;
-    if (typeof label !== "string") return;
-    const clicked = Date.parse(label);
-    let best: string | null = null;
-    let bestDist = 5 * 86400000 + 1;
-    for (const t of catTxnDates) {
-      const dist = Math.abs(Date.parse(t.date) - clicked);
-      if (dist < bestDist) {
-        bestDist = dist;
-        best = t.date;
-      }
-    }
-    setSelectedDate(best === selectedDate ? null : best);
-  };
-
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-xs text-muted">
-          Market value of what you hold, split by {grouping === "category" ? "category." : "asset."} Vertical
-          lines are transactions — tap one for details.
-        </p>
+      <div className="flex flex-wrap items-center gap-3">
         <div className="flex flex-wrap items-center gap-2">
+          <ModeToggle mode={mode} onToggle={toggleMode} />
           <Toggle
             options={[{ k: "category", l: "Groups" }, { k: "asset", l: "Assets" }]}
             value={grouping}
@@ -237,19 +235,141 @@ export default function CapitalChart() {
           <RangeControl
             sel={sel}
             onChange={setManual}
-            onBack={goBack}
-            backTo={prevSel}
             txns={txnMarks}
             min={data.dates[0]}
             max={data.dates[data.dates.length - 1]}
+            windowFrom={model.winFrom}
           />
-          <ModeToggle mode={mode} onToggle={toggleMode} />
         </div>
       </div>
 
+      <div className="rounded-lg border border-line bg-surface p-2 md:p-3">
+        {series.length === 0 ? (
+          // Same height as the chart — the block must not resize when nothing is selected.
+          <div className="flex h-[320px] w-full items-center justify-center md:h-[420px]">
+            <p className="text-sm text-muted">Select at least one group.</p>
+          </div>
+        ) : (
+          <div
+            ref={zoom.containerRef}
+            className="h-[320px] w-full select-none md:h-[420px]"
+            title="Drag to zoom — double-click to reset to the range picked above"
+          >
+            <ResponsiveContainer>
+              <AreaChart
+                // Recharts 3 stacks in item *registration* (mount) order, not
+                // JSX order — a group toggled off and back on would re-register
+                // last and jump to the top of the stack. Remount the chart when
+                // the set of series changes so registration follows the
+                // canonical `series` order again.
+                key={series.map((s) => s.key).join("|")}
+                data={rows}
+                accessibilityLayer={false} // keeps the svg unfocusable — no focus rectangle on click
+                stackOffset={pct ? "expand" : "none"}
+                margin={{ top: 10, right: 12, bottom: 0, left: 4 }}
+                onMouseDown={(e, ev) => {
+                  ev?.preventDefault(); // stop native text-selection/drag (Firefox/Safari ignore user-select on SVG mid-drag)
+                  zoom.start(e?.activeLabel);
+                }}
+                onMouseMove={(e) => zoom.move(e?.activeLabel)}
+                onMouseUp={zoom.end}
+              >
+                <CartesianGrid stroke={C.grid} strokeWidth={1} vertical={false} />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fill: C.muted, fontSize: 11 }}
+                  tickLine={false}
+                  axisLine={{ stroke: C.axis }}
+                  tickFormatter={tickFmt}
+                  minTickGap={40}
+                />
+                <YAxis
+                  tick={{ fill: C.muted, fontSize: 11 }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={54}
+                  tickFormatter={(v: number) => (pct ? fmtPct(v, false, 0) : fmtEUR(v, true))}
+                />
+                <Tooltip
+                  content={<CapTip pct={pct} chromeC={C} series={series} txnDates={catTxnDates} nameFor={nameFor} />}
+                  cursor={{ stroke: C.muted, strokeWidth: 1, strokeDasharray: "3 3" }}
+                  isAnimationActive={false}
+                />
+                {series.map((s, i) => (
+                  <Area
+                    key={s.key}
+                    // stepAfter: a transaction shows as a vertical jump ON its
+                    // date (each row already holds the post-txn value), not a
+                    // ramp from the day before. At daily resolution the stairs
+                    // between txns read like a linear line anyway.
+                    type="stepAfter"
+                    dataKey={s.key}
+                    name={s.label}
+                    stackId="cap"
+                    stroke={C.surface}
+                    strokeWidth={1}
+                    fill={s.color}
+                    fillOpacity={0.85}
+                    isAnimationActive={false}
+                    // Hover dots mark the internal boundaries only — none on the outer top
+                    // edge, and none for series worth 0 at the hovered date (they'd pile
+                    // up as ghost dots on the stack line).
+                    activeDot={
+                      i === series.length - 1
+                        ? false
+                        : (props: ActiveDotProps) =>
+                            (Number(props.payload?.[s.key]) || 0) > 0 ? <Dot {...props} /> : null
+                    }
+                  />
+                ))}
+                {visibleTxnDates.map((t) => (
+                  <ReferenceLine
+                    key={t.date}
+                    x={t.date}
+                    stroke={C.ink}
+                    strokeWidth={t.date === selectedDate ? 2.5 : 1.5}
+                  />
+                ))}
+                {/* Drawn after the ink lines so the traded band's color covers them. */}
+                {txnBands.map((b) => (
+                  <ReferenceLine
+                    key={b.id}
+                    segment={[{ x: b.date, y: b.y1 }, { x: b.date, y: b.y2 }]}
+                    stroke={mixHex(b.color, "#000000", dark ? 0.25 : 0.4)}
+                    strokeWidth={3}
+                    strokeLinecap="round"
+                  />
+                ))}
+                {zoom.drag && (
+                  <ReferenceArea
+                    x1={zoom.drag.from}
+                    x2={zoom.drag.to}
+                    fill={C.muted}
+                    fillOpacity={0.15}
+                    stroke={C.axis}
+                  />
+                )}
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+
+      {/* Group filter — doubles as the legend (color swatches). */}
       {presentCats.length > 1 && (
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
-          <span className="text-muted">Groups</span>
+          <button
+            onClick={() => setCats(null)}
+            className={`rounded-md border border-line px-2 py-1 ${cats ? "bg-surface text-muted hover:text-ink2" : "text-ink2"}`}
+          >
+            All
+          </button>
+          <button
+            onClick={() => setCats([])}
+            className={`rounded-md border border-line px-2 py-1 ${cats?.length === 0 ? "text-ink2" : "bg-surface text-muted hover:text-ink2"}`}
+          >
+            None
+          </button>
           {presentCats.map((c) => {
             const on = catOn(c.key);
             const color = categoryColor(c.key, dark);
@@ -258,7 +378,7 @@ export default function CapitalChart() {
                 key={c.key}
                 onClick={() => toggleCat(c.key)}
                 className={`flex items-center gap-1.5 rounded-md border px-2 py-1 ${
-                  on ? "border-transparent font-medium" : "border-line text-muted"
+                  on ? "border-transparent font-medium" : "border-line bg-surface text-muted"
                 }`}
                 style={on ? { background: color + (dark ? "2e" : "1f"), color } : undefined}
               >
@@ -269,95 +389,6 @@ export default function CapitalChart() {
           })}
         </div>
       )}
-
-      <div className="rounded-lg border border-line bg-surface p-2 md:p-3">
-        <div className="h-[320px] w-full md:h-[420px]">
-          <ResponsiveContainer>
-            <AreaChart
-              data={rows}
-              stackOffset={pct ? "expand" : "none"}
-              margin={{ top: 10, right: 12, bottom: 0, left: 4 }}
-              onClick={onChartClick}
-            >
-              <CartesianGrid stroke={C.grid} strokeWidth={1} vertical={false} />
-              <XAxis
-                dataKey="date"
-                tick={{ fill: C.muted, fontSize: 11 }}
-                tickLine={false}
-                axisLine={{ stroke: C.axis }}
-                tickFormatter={tickFmt}
-                minTickGap={40}
-              />
-              <YAxis
-                tick={{ fill: C.muted, fontSize: 11 }}
-                tickLine={false}
-                axisLine={false}
-                width={54}
-                tickFormatter={(v: number) => (pct ? fmtPct(v, false, 0) : fmtEUR(v, true))}
-              />
-              <Tooltip
-                content={<CapTip pct={pct} chromeC={C} series={series} txnDates={catTxnDates} />}
-                cursor={{ stroke: C.muted, strokeWidth: 1, strokeDasharray: "3 3" }}
-                isAnimationActive={false}
-              />
-              {series.map((s, i) => (
-                <Area
-                  key={s.key}
-                  type="linear"
-                  dataKey={s.key}
-                  name={s.label}
-                  stackId="cap"
-                  stroke={C.surface}
-                  strokeWidth={1}
-                  fill={s.color}
-                  fillOpacity={0.85}
-                  isAnimationActive={false}
-                  // Hover dots mark the internal boundaries only — none on the outer top edge.
-                  activeDot={i === series.length - 1 ? false : undefined}
-                />
-              ))}
-              {txnBands.map((b) => (
-                <ReferenceLine
-                  key={b.id}
-                  segment={[{ x: b.date, y: b.y1 }, { x: b.date, y: b.y2 }]}
-                  stroke={mixHex(b.color, "#000000", dark ? 0.25 : 0.4)}
-                  strokeWidth={3}
-                />
-              ))}
-              {visibleTxnDates.map((t) => (
-                <ReferenceLine
-                  key={t.date}
-                  x={t.date}
-                  stroke={C.ink}
-                  strokeWidth={t.date === selectedDate ? 2.5 : 1.5}
-                  opacity={t.date === selectedDate ? 1 : 0.55}
-                />
-              ))}
-              <Brush
-                key={`${rows.length}:${rows[0]?.date ?? ""}:${rows[rows.length - 1]?.date ?? ""}`}
-                dataKey="date"
-                height={22}
-                travellerWidth={8}
-                stroke={C.axis}
-                fill={C.surface}
-                tickFormatter={tickFmt}
-                onChange={onBrush}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 px-2 pb-1 text-xs text-ink2">
-          {series.map((s) => (
-            <span key={s.key} className="flex items-center gap-1.5">
-              <span className="inline-block h-2.5 w-2.5 rounded-[3px]" style={{ background: s.color }} />
-              {s.label}
-            </span>
-          ))}
-          <span className="flex items-center gap-1.5 text-muted">
-            <span className="inline-block h-3 w-px" style={{ background: C.ink }} /> transaction (tap to inspect)
-          </span>
-        </div>
-      </div>
 
       {selected && (
         <div className="rounded-lg border border-line bg-surface p-3">
@@ -373,7 +404,7 @@ export default function CapitalChart() {
                   <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold uppercase ${t.type === "buy" ? "bg-accent/10 text-accent" : "bg-down/10 text-down"}`}>
                     {t.type}
                   </span>
-                  <span className="font-medium">{t.assetName}</span>
+                  <span className="font-medium">{nameFor(t.assetId, t.assetName)}</span>
                   <span className="text-xs text-muted">{t.symbol}</span>
                 </span>
                 <span className="tnum text-xs text-ink2">
@@ -405,7 +436,7 @@ function Toggle({
         <button
           key={o.k}
           onClick={() => onChange(o.k)}
-          className={`px-2.5 py-1 ${value === o.k ? "bg-accent/15 font-semibold text-accent" : "text-muted hover:text-ink2"}`}
+          className={`px-2.5 py-1 ${value === o.k ? "bg-accent/15 font-semibold text-accent" : "bg-surface text-muted hover:text-ink2"}`}
         >
           {o.l}
         </button>
@@ -423,6 +454,7 @@ function CapTip({
   chromeC,
   series,
   txnDates,
+  nameFor,
 }: {
   active?: boolean;
   payload?: { name?: string; value?: number; dataKey?: string; payload?: Record<string, number> }[];
@@ -432,6 +464,7 @@ function CapTip({
   chromeC: ReturnType<typeof chrome>;
   series: CapSeries[];
   txnDates: CapitalData["txnDates"];
+  nameFor: (id: number, full: string) => string;
 }) {
   const yInverse = useYAxisInverseScale();
   if (!active || !payload?.length) return null;
@@ -492,14 +525,12 @@ function CapTip({
       })}
       {nearTxn && (
         <div className="mt-1.5 border-t pt-1.5" style={{ borderColor: chromeC.grid }}>
-          {nearTxn.date !== label && (
-            <div className="mb-0.5" style={{ color: chromeC.muted }}>{fmtDate(nearTxn.date)}</div>
-          )}
+          <div className="mb-0.5" style={{ color: chromeC.muted }}>{fmtDate(nearTxn.date)}</div>
           {nearTxn.txns.map((t) => (
             <div key={t.id} className="flex items-center justify-between gap-4">
               <span className="flex items-center gap-1.5" style={{ color: chromeC.inkSecondary }}>
                 <span className="font-semibold uppercase" style={{ color: chromeC.ink }}>{t.type}</span>
-                {t.assetName}
+                {nameFor(t.assetId, t.assetName)}
               </span>
               <span className="tnum">{fmtEUR(t.amountEUR)}</span>
             </div>

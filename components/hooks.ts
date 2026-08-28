@@ -15,6 +15,19 @@ export function useDark(): boolean {
   return dark;
 }
 
+/** Phone-sized viewport (Tailwind's sm breakpoint) — picks short asset names. */
+export function useMobile(): boolean {
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 640px)");
+    setMobile(mq.matches);
+    const fn = (e: MediaQueryListEvent) => setMobile(e.matches);
+    mq.addEventListener("change", fn);
+    return () => mq.removeEventListener("change", fn);
+  }, []);
+  return mobile;
+}
+
 export type ValueMode = "abs" | "pct";
 
 /** Global €/% display toggle, shared across pages via localStorage. */

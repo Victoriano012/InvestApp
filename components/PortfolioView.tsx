@@ -2,15 +2,14 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useDark, useJson, useValueMode } from "./hooks";
+import { useDark, useJson, useMobile, useValueMode } from "./hooks";
 import ModeToggle from "./ModeToggle";
-import { fmtDate, fmtDateShort, fmtEUR, fmtPct, fmtSignedEUR } from "@/lib/format";
+import { fmtDate, fmtDayShort, fmtEUR, fmtPct, fmtSignedEUR } from "@/lib/format";
 import { categoryColor } from "@/lib/palette";
-import { CATEGORIES, CATEGORY_LABEL, type Holding, type PortfolioSummary, type ReturnStats } from "@/lib/types";
+import { assetLabel, CATEGORIES, CATEGORY_LABEL, type Holding, type PortfolioSummary, type ReturnStats } from "@/lib/types";
 
 const SORT_OPTIONS = [
-  { key: "default", label: "Default order" },
-  { key: "category", label: "Category" },
+  { key: "category", label: "Group" },
   { key: "value", label: "Current value" },
   { key: "invested", label: "Money put in" },
   { key: "gain", label: "Gain" },
@@ -31,15 +30,14 @@ function Delta({ v, money }: { v: number | null | undefined; money?: boolean }) 
 function Annual({ s, date }: { s: ReturnStats | null; date?: string | null }) {
   const when = date ? (
     <span className="ml-1 text-[10px] text-muted" title={fmtDate(date)}>
-      {fmtDateShort(date)}
+      {fmtDayShort(date)}
     </span>
   ) : null;
   if (!s) return <span className="text-muted">—</span>;
   if (s.days < 30)
     return (
-      <span className="text-muted" title={`Held only ${s.days} days — annualizing would be noise. Total so far: ${fmtPct(s.totalPct)}`}>
+      <span className="text-muted" title={`Ann. return: ${fmtPct(s.annualPct)}`}>
         {fmtPct(s.totalPct)}
-        <span className="ml-1 text-[10px]">({s.days}d)</span>
         {when}
       </span>
     );
@@ -54,9 +52,10 @@ function Annual({ s, date }: { s: ReturnStats | null; date?: string | null }) {
 export default function PortfolioView() {
   const { data, error, reload } = useJson<PortfolioSummary>("/api/portfolio");
   const [mode, toggleMode] = useValueMode();
-  const [sortKey, setSortKey] = useState<SortKey>("default");
+  const [sortKey, setSortKey] = useState<SortKey>("category");
   const [sortAsc, setSortAsc] = useState(false);
   const dark = useDark();
+  const mobile = useMobile();
 
   // Restore the last-used sort (shared behavior with the €/% toggle).
   useEffect(() => {
@@ -84,11 +83,16 @@ export default function PortfolioView() {
   const holdings = data?.holdings;
   const heldSorted = useMemo(() => {
     const held = (holdings ?? []).filter((h) => h.quantity > 0 || h.txnCount > 0);
-    if (sortKey === "default") return sortAsc ? [...held].reverse() : held;
+    if (sortKey === "category") {
+      // Fixed CATEGORIES order, keeping the DB order within each category
+      // (stable sort) — reversing wholesale only when ascending.
+      const arr = [...held].sort(
+        (a, b) => (CAT_ORDER.get(a.asset.category) ?? 99) - (CAT_ORDER.get(b.asset.category) ?? 99)
+      );
+      return sortAsc ? arr.reverse() : arr;
+    }
     const val = (h: Holding): number => {
       switch (sortKey) {
-        case "category":
-          return -(CAT_ORDER.get(h.asset.category) ?? 99); // negated: desc shows CATEGORIES order
         case "value":
           return h.valueEUR;
         case "invested":
@@ -120,10 +124,22 @@ export default function PortfolioView() {
 
   return (
     <div className="space-y-5">
+      {/* Summary tiles */}
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 md:gap-3">
+        <Tile label="Total value" value={fmtEUR(data.totalValueEUR)} />
+        <Tile
+          label="Unrealized"
+          value={pct
+            ? fmtPct(data.totalCostEUR > 0 ? data.totalUnrealizedEUR / data.totalCostEUR : null)
+            : fmtSignedEUR(data.totalUnrealizedEUR)}
+          tone={data.totalUnrealizedEUR}
+        />
+        <Tile label="Invested" value={fmtEUR(data.totalInvestedEUR)} sub={data.totalRealizedEUR !== 0 ? `realized ${fmtSignedEUR(data.totalRealizedEUR)}` : undefined} />
+      </div>
+
       <div className="flex flex-wrap items-center justify-end gap-3">
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-1.5 text-xs text-muted">
-            Sort
             <select
               className="rounded-md border border-line bg-surface px-2 py-1 text-sm text-ink2"
               value={sortKey}
@@ -144,19 +160,6 @@ export default function PortfolioView() {
           </button>
           <ModeToggle mode={mode} onToggle={toggleMode} />
         </div>
-      </div>
-
-      {/* Summary tiles */}
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 md:gap-3">
-        <Tile label="Total value" value={fmtEUR(data.totalValueEUR)} />
-        <Tile
-          label="Unrealized"
-          value={pct
-            ? fmtPct(data.totalCostEUR > 0 ? data.totalUnrealizedEUR / data.totalCostEUR : null)
-            : fmtSignedEUR(data.totalUnrealizedEUR)}
-          tone={data.totalUnrealizedEUR}
-        />
-        <Tile label="Invested" value={fmtEUR(data.totalInvestedEUR)} sub={data.totalRealizedEUR !== 0 ? `realized ${fmtSignedEUR(data.totalRealizedEUR)}` : undefined} />
       </div>
 
       {data.staleQuotes.length > 0 && (
@@ -205,7 +208,7 @@ export default function PortfolioView() {
                 className="flex items-center gap-2 rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm"
               >
                 <span className="h-2.5 w-2.5 rounded-full" style={{ background: categoryColor(h.asset.category, dark) }} />
-                <span>{h.asset.name}</span>
+                <span>{assetLabel(h.asset, mobile)}</span>
                 <span className="text-xs text-muted">{h.asset.kind === "basket" ? "basket" : h.asset.symbol}</span>
               </Link>
             ))}
@@ -213,11 +216,6 @@ export default function PortfolioView() {
         </div>
       )}
 
-      {data.quotesAsOf && (
-        <p className="text-xs text-muted">
-          Prices as of {new Date(data.quotesAsOf).toLocaleTimeString()} · quotes cached 5 min · via Yahoo Finance
-        </p>
-      )}
     </div>
   );
 }
@@ -234,13 +232,18 @@ function Tile({ label, value, tone, sub }: { label: string; value: string; tone?
 }
 
 function AssetLabel({ h, dark }: { h: Holding; dark: boolean }) {
+  const mobile = useMobile();
   return (
     <div className="flex items-center gap-2.5">
       <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: categoryColor(h.asset.category, dark) }} />
       <div>
-        <div className="font-medium">{h.asset.name}</div>
+        <div className="font-medium">{assetLabel(h.asset, mobile)}</div>
         <div className="text-xs text-muted">
-          {h.asset.kind === "basket" ? "Basket" : h.asset.symbol} · {CATEGORY_LABEL[h.asset.category]}
+          {h.asset.kind === "basket"
+            ? "Basket"
+            : h.asset.category === "gold" || h.asset.category === "crypto"
+              ? h.asset.symbol
+              : `${h.asset.symbol} · ${CATEGORY_LABEL[h.asset.category]}`}
           {h.txnCount > 1 && ` · ${h.lots.filter((l) => l.remaining > 0).length} lots`}
         </div>
       </div>

@@ -10,7 +10,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   if (!getAsset(Number(id))) return NextResponse.json({ error: "not found" }, { status: 404 });
   const b = await req.json();
   const patch: Record<string, unknown> = {};
-  for (const k of ["symbol", "name", "category", "currency", "sort"]) {
+  for (const k of ["symbol", "name", "short_name", "category", "currency", "sort"]) {
     if (b[k] !== undefined) patch[k] = b[k];
   }
   try {

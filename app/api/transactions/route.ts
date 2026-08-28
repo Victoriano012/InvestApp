@@ -20,6 +20,8 @@ export async function POST(req: NextRequest) {
     price: Number(b.price),
     fees: Number(b.fees ?? 0),
     note: b.note ?? null,
+    paid_amount: b.paid_amount != null ? Number(b.paid_amount) : null,
+    paid_currency: b.paid_amount != null ? String(b.paid_currency) : null,
   });
   return NextResponse.json(txn, { status: 201 });
 }
@@ -33,5 +35,10 @@ function validate(b: Record<string, unknown>): string | null {
   if (!(Number(b.quantity) > 0)) return "quantity must be > 0";
   if (!(Number(b.price) >= 0)) return "price must be >= 0";
   if (b.fees != null && !(Number(b.fees) >= 0)) return "fees must be >= 0";
+  if (b.paid_amount != null) {
+    if (!(Number(b.paid_amount) > 0)) return "paid_amount must be > 0";
+    if (typeof b.paid_currency !== "string" || !b.paid_currency)
+      return "paid_currency required when paid_amount is set";
+  }
   return null;
 }

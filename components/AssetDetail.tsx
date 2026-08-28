@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useDark, useJson, useValueMode } from "./hooks";
+import { useDark, useJson, useMobile, useValueMode } from "./hooks";
 import ModeToggle from "./ModeToggle";
 import { fmtDate, fmtEUR, fmtMoney, fmtNum, fmtPct, fmtSignedEUR } from "@/lib/format";
 import { categoryColor } from "@/lib/palette";
-import { CATEGORY_LABEL, type BasketComponent, type PortfolioSummary, type Txn } from "@/lib/types";
+import { assetLabel, CATEGORY_LABEL, type BasketComponent, type PortfolioSummary, type Txn } from "@/lib/types";
 
 function D({ v, money }: { v: number | null | undefined; money?: boolean }) {
   if (v == null || !isFinite(v)) return <span className="text-muted">—</span>;
@@ -18,6 +18,7 @@ export default function AssetDetail({ id }: { id: number }) {
   const { data: txns } = useJson<Txn[]>(`/api/transactions?asset=${id}`);
   const [mode, toggleMode] = useValueMode();
   const dark = useDark();
+  const mobile = useMobile();
 
   if (error) return <p className="p-6 text-sm text-down">Failed to load: {error}</p>;
   if (!data) return <p className="p-6 text-sm text-muted">Loading…</p>;
@@ -34,7 +35,7 @@ export default function AssetDetail({ id }: { id: number }) {
         <div className="flex items-center gap-2.5">
           <span className="h-3 w-3 rounded-full" style={{ background: categoryColor(h.asset.category, dark) }} />
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">{h.asset.name}</h1>
+            <h1 className="text-xl font-semibold tracking-tight">{assetLabel(h.asset, mobile)}</h1>
             <p className="text-xs text-muted">
               {isBasket ? "Basket (equal parts per buy)" : h.asset.symbol} · {CATEGORY_LABEL[h.asset.category]} · quoted in {h.asset.currency}
             </p>
@@ -45,9 +46,9 @@ export default function AssetDetail({ id }: { id: number }) {
 
       <div className="grid grid-cols-2 gap-2 md:grid-cols-3 md:gap-3">
         {isBasket ? (
-          <Tile label="Per €1 invested" value={h.priceNative != null ? fmtEUR(h.priceNative) : "—"} sub="value of 1€ put in (avg. across buys)" />
+          <Tile label="Per €1 invested" value={h.priceNative != null ? fmtEUR(h.priceNative) : "—"} />
         ) : (
-          <Tile label={`Price (${h.asset.currency})`} value={fmtMoney(h.priceNative, h.asset.currency)} sub={h.asset.currency !== "EUR" ? fmtEUR(h.priceEUR) : undefined} />
+          <Tile label="Price" value={fmtMoney(h.priceNative, h.asset.currency)} sub={h.asset.currency !== "EUR" ? fmtEUR(h.priceEUR) : undefined} />
         )}
         <Tile
           label={isBasket ? "Invested" : "Held"}
@@ -77,6 +78,7 @@ export default function AssetDetail({ id }: { id: number }) {
                   <th className="px-3 py-2 text-right font-medium" title="Geometric mean monthly return since this buy">Mean monthly</th>
                   <th className="px-3 py-2 text-right font-medium" title="Annualized return since this buy">Annualized</th>
                   <th className="px-3 py-2 text-right font-medium">Held</th>
+                  <th className="px-3 py-2" aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
@@ -105,6 +107,9 @@ export default function AssetDetail({ id }: { id: number }) {
                         {short ? <span className="text-muted" title="Held under 30 days — rate not meaningful yet">—</span> : <D v={lot.stats.annualPct} />}
                       </td>
                       <td className="tnum px-3 py-2 text-right text-xs text-muted">{lot.stats.days}d</td>
+                      <td className="px-3 py-2 text-right">
+                        <Link href={`/transactions?edit=${lot.txnId}`} className="text-accent" title="Edit" aria-label="Edit">✎</Link>
+                      </td>
                     </tr>
                   );
                 })}
@@ -124,7 +129,10 @@ export default function AssetDetail({ id }: { id: number }) {
             {sells.map((s) => (
               <div key={s.id} className="flex items-center justify-between border-b border-line/60 px-3 py-2 text-sm last:border-0">
                 <span>{fmtDate(s.date)}</span>
-                <span className="tnum">{isBasket ? fmtEUR(s.quantity * s.price) : <>{fmtNum(s.quantity)} × {fmtMoney(s.price, h.asset.currency)}</>}</span>
+                <span className="flex items-center gap-3">
+                  <span className="tnum">{isBasket ? fmtEUR(s.quantity * s.price) : <>{fmtNum(s.quantity)} × {fmtMoney(s.price, h.asset.currency)}</>}</span>
+                  <Link href={`/transactions?edit=${s.id}`} className="text-accent" title="Edit" aria-label="Edit">✎</Link>
+                </span>
               </div>
             ))}
             <div className="flex items-center justify-between px-3 py-2 text-sm">
@@ -148,7 +156,7 @@ function BasketComponents({ id }: { id: number }) {
   if (!comps || comps.length === 0) return null;
   return (
     <div className="rounded-lg border border-line bg-surface p-3">
-      <div className="mb-1.5 text-xs font-semibold text-ink2">Components ({comps.length}) — each buy is split equally among them</div>
+      <div className="mb-1.5 text-xs font-semibold text-ink2">Components ({comps.length}) — equally split</div>
       <div className="flex flex-wrap gap-1.5">
         {comps.map((c) => (
           <span key={c.id} className="rounded-md border border-line/70 px-2 py-1 text-xs">
@@ -156,7 +164,6 @@ function BasketComponents({ id }: { id: number }) {
           </span>
         ))}
       </div>
-      <p className="mt-1.5 text-[11px] text-muted">Edit the list on the Activity page (☰ next to the basket).</p>
     </div>
   );
 }

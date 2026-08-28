@@ -16,8 +16,9 @@ const SEED: { symbol: string; name: string; category: Category; currency: string
   { symbol: "VIST", name: "Vista Energy", category: "arg_stock", currency: "USD" },
   { symbol: "CRESY", name: "Cresud", category: "arg_stock", currency: "USD" },
   { symbol: "CEPU", name: "Central Puerto", category: "arg_stock", currency: "USD" },
-  // XAU spot isn't served by Yahoo — COMEX front-month futures are the closest proxy.
-  { symbol: "GC=F", name: "Gold XAU (oz t)", category: "gold", currency: "USD" },
+  // XAU spot isn't served by Yahoo — PAX Gold (1 token = 1 oz t of vaulted
+  // gold) tracks XAU/USD spot; GC=F futures carry a contango premium.
+  { symbol: "PAXG-USD", name: "Gold XAU (oz t)", category: "gold", currency: "USD" },
   { symbol: "BTC-EUR", name: "Bitcoin", category: "crypto", currency: "EUR" },
 ];
 
@@ -96,6 +97,18 @@ export function db(): Database.Database {
   if (!cols.some((c) => c.name === "kind")) {
     _db.exec("ALTER TABLE assets ADD COLUMN kind TEXT NOT NULL DEFAULT 'single'");
   }
+  if (!cols.some((c) => c.name === "short_name")) {
+    _db.exec("ALTER TABLE assets ADD COLUMN short_name TEXT");
+  }
+  // Display-only record of what was actually paid/received (any currency).
+  // Portfolio math stays on quantity/price/fees; these never enter it.
+  const txnCols = _db.prepare("PRAGMA table_info(transactions)").all() as { name: string }[];
+  if (!txnCols.some((c) => c.name === "paid_amount")) {
+    _db.exec("ALTER TABLE transactions ADD COLUMN paid_amount REAL");
+  }
+  if (!txnCols.some((c) => c.name === "paid_currency")) {
+    _db.exec("ALTER TABLE transactions ADD COLUMN paid_currency TEXT");
+  }
   const count = (_db.prepare("SELECT COUNT(*) AS n FROM assets").get() as { n: number }).n;
   if (count === 0) {
     const ins = _db.prepare(
@@ -146,6 +159,18 @@ export function db(): Database.Database {
       .run();
     _db.prepare("INSERT INTO meta (key, value) VALUES ('fix:gold-xau', '1')").run();
   }
+  // Gold: GC=F quotes the COMEX front-month future (a ~1% contango premium over
+  // spot); PAXG-USD (PAX Gold, 1 token = 1 fine oz t of vaulted gold) tracks
+  // XAU/USD spot. Units stay troy oz and currency stays USD, so transactions
+  // are untouched — only the price source changes.
+  const goldPaxg = _db.prepare("SELECT value FROM meta WHERE key = 'fix:gold-paxg'").get();
+  if (!goldPaxg) {
+    _db.prepare("UPDATE assets SET symbol = 'PAXG-USD' WHERE symbol = 'GC=F'").run();
+    _db.prepare("DELETE FROM price_history WHERE symbol = 'GC=F'").run();
+    _db.prepare("DELETE FROM quotes WHERE symbol = 'GC=F'").run();
+    _db.prepare("DELETE FROM meta WHERE key = 'hist:GC=F'").run();
+    _db.prepare("INSERT INTO meta (key, value) VALUES ('fix:gold-paxg', '1')").run();
+  }
   return _db;
 }
 
@@ -175,8 +200,10 @@ export function updateAsset(id: number, patch: Partial<Omit<Asset, "id">>): Asse
   if (!cur) return undefined;
   const next = { ...cur, ...patch };
   db()
-    .prepare("UPDATE assets SET symbol = ?, name = ?, category = ?, currency = ?, sort = ? WHERE id = ?")
-    .run(next.symbol, next.name, next.category, next.currency, next.sort, id);
+    .prepare(
+      "UPDATE assets SET symbol = ?, name = ?, short_name = ?, category = ?, currency = ?, sort = ? WHERE id = ?"
+    )
+    .run(next.symbol, next.name, next.short_name ?? null, next.category, next.currency, next.sort, id);
   return getAsset(id);
 }
 
@@ -224,9 +251,12 @@ export function getTxn(id: number): Txn | undefined {
 export function createTxn(t: Omit<Txn, "id">): Txn {
   const r = db()
     .prepare(
-      "INSERT INTO transactions (asset_id, type, date, quantity, price, fees, note) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      "INSERT INTO transactions (asset_id, type, date, quantity, price, fees, note, paid_amount, paid_currency) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
-    .run(t.asset_id, t.type, t.date, t.quantity, t.price, t.fees ?? 0, t.note ?? null);
+    .run(
+      t.asset_id, t.type, t.date, t.quantity, t.price, t.fees ?? 0, t.note ?? null,
+      t.paid_amount ?? null, t.paid_currency ?? null
+    );
   return getTxn(Number(r.lastInsertRowid))!;
 }
 
@@ -236,9 +266,12 @@ export function updateTxn(id: number, patch: Partial<Omit<Txn, "id">>): Txn | un
   const next = { ...cur, ...patch };
   db()
     .prepare(
-      "UPDATE transactions SET asset_id = ?, type = ?, date = ?, quantity = ?, price = ?, fees = ?, note = ? WHERE id = ?"
+      "UPDATE transactions SET asset_id = ?, type = ?, date = ?, quantity = ?, price = ?, fees = ?, note = ?, paid_amount = ?, paid_currency = ? WHERE id = ?"
     )
-    .run(next.asset_id, next.type, next.date, next.quantity, next.price, next.fees, next.note, id);
+    .run(
+      next.asset_id, next.type, next.date, next.quantity, next.price, next.fees, next.note,
+      next.paid_amount ?? null, next.paid_currency ?? null, id
+    );
   return getTxn(id);
 }
 

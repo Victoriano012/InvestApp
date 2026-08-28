@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
       const asset = createAsset({
         symbol: `BASKET:${slug || Date.now()}`,
         name: b.name.trim(),
+        short_name: null,
         category: b.category,
         currency: "EUR",
         kind: "basket",
@@ -40,6 +41,7 @@ export async function POST(req: NextRequest) {
     const asset = createAsset({
       symbol: b.symbol.trim(),
       name: (b.name || b.symbol).trim(),
+      short_name: null,
       category: b.category,
       currency,
     });

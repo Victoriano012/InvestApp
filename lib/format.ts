@@ -10,14 +10,29 @@ const eurFmt0 = new Intl.NumberFormat("en-IE", {
   maximumFractionDigits: 0,
 });
 
+/**
+ * en-IE renders "€1,234.56"; we want the symbol after the number
+ * ("1,234.56 €", non-breaking space) while keeping en-IE grouping/decimals.
+ * The sign stays with the number: "-1,234.56 €".
+ */
+function euroAfter(fmt: Intl.NumberFormat, v: number): string {
+  const num = fmt
+    .formatToParts(v)
+    .filter((p) => p.type !== "currency")
+    .map((p) => p.value)
+    .join("")
+    .trim();
+  return `${num}\u00A0€`;
+}
+
 export function fmtEUR(v: number | null | undefined, compact = false): string {
   if (v == null || !isFinite(v)) return "—";
-  return compact && Math.abs(v) >= 1000 ? eurFmt0.format(v) : eurFmt.format(v);
+  return euroAfter(compact && Math.abs(v) >= 1000 ? eurFmt0 : eurFmt, v);
 }
 
 export function fmtSignedEUR(v: number | null | undefined): string {
   if (v == null || !isFinite(v)) return "—";
-  return (v > 0 ? "+" : "") + eurFmt.format(v);
+  return (v > 0 ? "+" : "") + euroAfter(eurFmt, v);
 }
 
 /** v is a ratio: 0.12 -> "+12.0%" */
@@ -35,11 +50,13 @@ export function fmtNum(v: number | null | undefined, maxDigits = 4): string {
 export function fmtMoney(v: number | null | undefined, currency: string): string {
   if (v == null || !isFinite(v)) return "—";
   try {
-    return new Intl.NumberFormat("en-IE", {
+    const fmt = new Intl.NumberFormat("en-IE", {
       style: "currency",
       currency,
+      currencyDisplay: "narrowSymbol",
       maximumFractionDigits: 2,
-    }).format(v);
+    });
+    return currency === "EUR" ? euroAfter(fmt, v) : fmt.format(v);
   } catch {
     return `${fmtNum(v, 2)} ${currency}`;
   }

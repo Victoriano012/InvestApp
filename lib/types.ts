@@ -1,11 +1,12 @@
 export type Category = "etf" | "us_stock" | "arg_stock" | "gold" | "crypto";
 
+// Fixed display order everywhere (Portfolio sort, chart pickers, Capital, Activity).
 export const CATEGORIES: { key: Category; label: string }[] = [
   { key: "etf", label: "ETFs" },
-  { key: "us_stock", label: "US stocks" },
-  { key: "arg_stock", label: "Argentine stocks" },
-  { key: "gold", label: "Gold" },
   { key: "crypto", label: "Bitcoin" },
+  { key: "gold", label: "Gold" },
+  { key: "us_stock", label: "US stocks" },
+  { key: "arg_stock", label: "Basket" },
 ];
 
 export const CATEGORY_LABEL: Record<Category, string> = Object.fromEntries(
@@ -18,10 +19,17 @@ export interface Asset {
   id: number;
   symbol: string;
   name: string;
+  // Optional short label: charts legend on desktop, everywhere on the phone.
+  short_name: string | null;
   category: Category;
   currency: string; // currency the symbol is quoted in (EUR for baskets)
   sort: number;
   kind: AssetKind;
+}
+
+/** Display name: the short one on phones (when set), the full one otherwise. */
+export function assetLabel(a: { name: string; short_name?: string | null }, mobile: boolean): string {
+  return mobile && a.short_name ? a.short_name : a.name;
 }
 
 /**
@@ -47,6 +55,10 @@ export interface Txn {
   price: number; // per unit, in asset currency
   fees: number; // in asset currency
   note: string | null;
+  // What was actually paid (buy) / received (sell), in the currency the user
+  // entered — display metadata only, never used in portfolio math.
+  paid_amount: number | null;
+  paid_currency: string | null;
 }
 
 export interface ReturnStats {
@@ -105,6 +117,7 @@ export interface ExplorerAsset {
   id: number;
   symbol: string;
   name: string;
+  short_name: string | null;
   category: Category;
   currency: string;
   dashIndex: number; // index within its category, for line dash pattern
@@ -112,6 +125,7 @@ export interface ExplorerAsset {
   priceNative: (number | null)[];
   valueEUR: (number | null)[]; // holding value per date
   costEUR: (number | null)[]; // FIFO cost of held shares per date
+  contributedEUR: number[]; // cumulative cash paid on buys; never reduced by sells
   realizedEUR: (number | null)[]; // cumulative realized P&L per date
   lots: {
     txnId: number;
@@ -119,6 +133,10 @@ export interface ExplorerAsset {
     quantity: number;
     priceNative: number;
     priceEUR: number;
+    // Baskets only: exact daily EUR value of one lot unit (the lot's frozen
+    // composition valued each day), so per-lot lines don't ride the
+    // equal-weight index approximation.
+    unitValueEUR?: (number | null)[];
   }[];
   txns: { id: number; type: TxnType; date: string; quantity: number; price: number }[];
 }
@@ -140,6 +158,7 @@ export interface CapitalData {
   assets: {
     id: number;
     name: string;
+    short_name: string | null;
     symbol: string;
     category: Category;
     invested: number[]; // FIFO cost EUR per date

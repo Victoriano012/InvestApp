@@ -7,6 +7,7 @@ import {
   historyMap,
 } from "./market";
 import { addDays, daysBetween, todayISO } from "./format";
+import { CATEGORIES } from "./types";
 import type {
   Asset,
   BasketComponent,
@@ -161,6 +162,27 @@ function computeTimeline(
     realizedEUR[i] = realized;
   }
   return { qty, costEUR, realizedEUR, lots };
+}
+
+/** Cumulative EUR cash paid into buys, including fees and never reduced by sells. */
+function cumulativeContributions(
+  txns: Txn[],
+  axis: string[],
+  currency: string,
+  fx: FxLookup
+): number[] {
+  const byDate = new Map<string, number>();
+  for (const t of txns) {
+    if (t.type !== "buy") continue;
+    const f = eurFactor(currency, fx.at(t.date)) ?? 0;
+    const paid = (t.quantity * t.price + (t.fees || 0)) * f;
+    byDate.set(t.date, (byDate.get(t.date) ?? 0) + paid);
+  }
+  let total = 0;
+  return axis.map((date) => {
+    total += byDate.get(date) ?? 0;
+    return total;
+  });
 }
 
 // ---------- basket timeline ----------
@@ -430,13 +452,6 @@ export async function getPortfolio(): Promise<PortfolioSummary> {
     const firstBuy = buys[0] ?? null;
     const lastBuy = buys[buys.length - 1] ?? null;
 
-    const statsFor = (b: Txn | null): ReturnStats | null => {
-      if (!b || priceEUR == null) return null;
-      const fb = eurFactor(asset.currency, fx.at(b.date));
-      if (fb == null) return null;
-      return returnStats(b.price * fb, priceEUR, b.date, today);
-    };
-
     const lots: LotStats[] = (tl?.lots ?? []).map((lot) => {
       const entryEUR = lot.unitCostEUR;
       const stats =
@@ -456,6 +471,8 @@ export async function getPortfolio(): Promise<PortfolioSummary> {
         stats,
       };
     });
+    // Same fee-inclusive entry as the per-lot table, so both views agree.
+    const lotBy = new Map(lots.map((l) => [l.txnId, l]));
 
     totalValue += value;
     totalCost += cost;
@@ -472,8 +489,8 @@ export async function getPortfolio(): Promise<PortfolioSummary> {
       unrealizedPct: cost > 0 ? (value - cost) / cost : null,
       realizedEUR: realized,
       weightPct: 0, // filled below
-      sinceFirstBuy: statsFor(firstBuy),
-      sinceLastBuy: statsFor(lastBuy),
+      sinceFirstBuy: firstBuy ? lotBy.get(firstBuy.id)?.stats ?? null : null,
+      sinceLastBuy: lastBuy ? lotBy.get(lastBuy.id)?.stats ?? null : null,
       firstBuyDate: firstBuy?.date ?? null,
       lastBuyDate: lastBuy?.date ?? null,
       lots,
@@ -518,8 +535,6 @@ export async function getExplorerData(): Promise<ExplorerData> {
   );
   const axis = buildAxis(from, today);
   const fx = buildFx(from, today);
-  const idxOf = new Map(axis.map((d, i) => [d, i]));
-
   const catCounters = new Map<Category, number>();
 
   const out: ExplorerAsset[] = assets.map((asset) => {
@@ -549,6 +564,7 @@ export async function getExplorerData(): Promise<ExplorerData> {
         id: asset.id,
         symbol: asset.symbol,
         name: asset.name,
+        short_name: asset.short_name,
         category: asset.category,
         currency: asset.currency,
         dashIndex,
@@ -556,17 +572,26 @@ export async function getExplorerData(): Promise<ExplorerData> {
         priceNative: priceEUR,
         valueEUR: tl ? tl.valueEUR : axis.map(() => null),
         costEUR: tl ? tl.costEUR : axis.map(() => null),
+        contributedEUR: cumulativeContributions(at, axis, asset.currency, fx),
         realizedEUR: tl ? tl.realizedEUR : axis.map(() => null),
-        lots: (tl?.lots ?? []).map((l) => {
-          const base = priceEUR[idxOf.get(l.date) ?? -1] ?? null;
-          return {
-            txnId: l.txnId,
-            date: l.date,
-            quantity: base ? l.units / base : l.units,
-            priceNative: base ?? 1,
-            priceEUR: base ?? 1,
-          };
-        }),
+        // Exact per-lot economics: entry = EUR paid per unit (incl. fees),
+        // unitValueEUR = the lot's frozen composition valued daily.
+        lots: (tl?.lots ?? []).map((l) => ({
+          txnId: l.txnId,
+          date: l.date,
+          quantity: l.units,
+          priceNative: l.unitCostEUR,
+          priceEUR: l.unitCostEUR,
+          unitValueEUR: axis.map((d, i) => {
+            if (d < l.date) return null;
+            let s = 0;
+            for (let j = 0; j < prices.length; j++) {
+              const p = prices[j][i];
+              if (p != null) s += l.compQty[j] * p;
+            }
+            return s > 0 ? s / l.units : null;
+          }),
+        })),
         txns: at.map((t) => ({
           id: t.id,
           type: t.type,
@@ -577,14 +602,21 @@ export async function getExplorerData(): Promise<ExplorerData> {
       };
     }
 
-    const priceNative = ffill(axis, historyMap(asset.symbol));
+    const at = txns.filter((t) => t.asset_id === asset.id);
+    const nativeHistory = historyMap(asset.symbol);
+    // A transaction can be dated on a weekend/holiday. Use its execution
+    // price when no market close exists so the series and trade marker begin
+    // on the actual transaction date instead of one trading day later.
+    for (const t of at) {
+      if (!nativeHistory.has(t.date)) nativeHistory.set(t.date, t.price);
+    }
+    const priceNative = ffill(axis, nativeHistory);
     const priceEUR = priceNative.map((p, i) => {
       if (p == null) return null;
       const f = eurFactor(asset.currency, fx.usdPerEur[i]);
       return f != null ? p * f : null;
     });
 
-    const at = txns.filter((t) => t.asset_id === asset.id);
     const tl = at.length ? computeTimeline(at, axis, asset.currency, fx) : null;
 
     const valueEUR = axis.map((_, i) => {
@@ -597,6 +629,7 @@ export async function getExplorerData(): Promise<ExplorerData> {
       id: asset.id,
       symbol: asset.symbol,
       name: asset.name,
+      short_name: asset.short_name,
       category: asset.category,
       currency: asset.currency,
       dashIndex,
@@ -604,6 +637,7 @@ export async function getExplorerData(): Promise<ExplorerData> {
       priceNative,
       valueEUR,
       costEUR: tl ? tl.costEUR : axis.map(() => null),
+      contributedEUR: cumulativeContributions(at, axis, asset.currency, fx),
       realizedEUR: tl ? tl.realizedEUR : axis.map(() => null),
       lots: (tl?.lots ?? []).map((l) => ({
         txnId: l.txnId,
@@ -631,13 +665,15 @@ export async function getCapitalData(): Promise<CapitalData> {
   const assets = listAssets();
   const txns = listTxns();
   const today = todayISO();
-  const emptyCats = (): Record<Category, number[]> => ({
-    etf: [],
-    us_stock: [],
-    arg_stock: [],
-    gold: [],
-    crypto: [],
-  });
+  // Known categories come from CATEGORIES (single source of truth); the DB can
+  // additionally hold categories outside the current union (older DBs, external
+  // imports), so buckets for those are created on demand below.
+  const catRecord = (make: () => number[]): Record<Category, number[]> => {
+    const rec = {} as Record<Category, number[]>;
+    for (const { key } of CATEGORIES) rec[key] = make();
+    return rec;
+  };
+  const emptyCats = () => catRecord(() => []);
   if (txns.length === 0) {
     return { dates: [], byCategory: emptyCats(), valueByCategory: emptyCats(), assets: [], txnDates: [] };
   }
@@ -657,15 +693,9 @@ export async function getCapitalData(): Promise<CapitalData> {
   const axis = buildAxis(from, today);
   const fx = buildFx(from, today);
 
-  const zeroCats = (): Record<Category, number[]> => ({
-    etf: new Array(axis.length).fill(0),
-    us_stock: new Array(axis.length).fill(0),
-    arg_stock: new Array(axis.length).fill(0),
-    gold: new Array(axis.length).fill(0),
-    crypto: new Array(axis.length).fill(0),
-  });
-  const byCategory = zeroCats();
-  const valueByCategory = zeroCats();
+  const zeroSeries = () => new Array<number>(axis.length).fill(0);
+  const byCategory = catRecord(zeroSeries);
+  const valueByCategory = catRecord(zeroSeries);
 
   const assetById = new Map(assets.map((a) => [a.id, a]));
 
@@ -694,8 +724,10 @@ export async function getCapitalData(): Promise<CapitalData> {
         value[i] = p != null && f != null ? tl.qty[i] * p * f : tl.costEUR[i];
       }
     }
-    const arr = byCategory[asset.category];
-    const varr = valueByCategory[asset.category];
+    // An asset whose category isn't in CATEGORIES (open set at the DB level)
+    // still gets a real bucket so its capital is counted, not dropped.
+    const arr = (byCategory[asset.category] ??= zeroSeries());
+    const varr = (valueByCategory[asset.category] ??= zeroSeries());
     for (let i = 0; i < axis.length; i++) {
       arr[i] += invested[i];
       varr[i] += value[i];
@@ -703,6 +735,7 @@ export async function getCapitalData(): Promise<CapitalData> {
     assetSeries.push({
       id: asset.id,
       name: asset.name,
+      short_name: asset.short_name,
       symbol: asset.symbol,
       category: asset.category,
       invested,

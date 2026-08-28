@@ -16,8 +16,8 @@ export default function ModeToggle({
       title="Toggle between absolute values and percentages"
       aria-label="Toggle between absolute values and percentages"
     >
-      <span className={`px-2.5 py-1 ${mode === "abs" ? "bg-accent/15 font-semibold text-accent" : "text-muted"}`}>€</span>
-      <span className={`px-2.5 py-1 ${mode === "pct" ? "bg-accent/15 font-semibold text-accent" : "text-muted"}`}>%</span>
+      <span className={`px-2.5 py-1 ${mode === "abs" ? "bg-accent/15 font-semibold text-accent" : "bg-surface text-muted"}`}>€</span>
+      <span className={`px-2.5 py-1 ${mode === "pct" ? "bg-accent/15 font-semibold text-accent" : "bg-surface text-muted"}`}>%</span>
     </button>
   );
 }
