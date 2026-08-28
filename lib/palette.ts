@@ -25,6 +25,31 @@ export function categoryColor(cat: Category, dark: boolean): string {
   return dark ? DARK[cat] : LIGHT[cat];
 }
 
+export function mixHex(a: string, b: string, t: number): string {
+  const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
+  const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
+  return (
+    "#" +
+    pa
+      .map((v, i) => Math.round(v + (pb[i] - v) * t).toString(16).padStart(2, "0"))
+      .join("")
+  );
+}
+
+/**
+ * Per-asset variant of a category hue: same hue family, stepped lighter/darker
+ * so stacked areas of one category stay visibly related but distinguishable.
+ * Index = the asset's position within its category (0 = the base hue).
+ */
+const SHADE_STEPS = [0, 0.28, -0.22, 0.48, -0.4, 0.64];
+
+export function categoryShade(cat: Category, index: number, dark: boolean): string {
+  const base = categoryColor(cat, dark);
+  const f = SHADE_STEPS[index % SHADE_STEPS.length];
+  if (f === 0) return base;
+  return mixHex(base, f > 0 ? "#ffffff" : "#1a1a1a", Math.abs(f));
+}
+
 /** Dash patterns for assets sharing a category hue (index = order within category). */
 export const DASHES = ["", "7 4", "2 3", "11 4 2 4"];
 

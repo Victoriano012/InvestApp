@@ -61,6 +61,20 @@ export function fmtDateShort(d: string): string {
   return dt.toLocaleDateString("en-IE", { month: "short", year: "2-digit", timeZone: "UTC" });
 }
 
+/** Numeric day label for zoomed-in axis ticks: 10/08/26. */
+export function fmtDayShort(d: string): string {
+  return `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(2, 4)}`;
+}
+
+/**
+ * Axis tick formatter for a window of `spanDays` rendered as ~`ticks` ticks:
+ * month labels normally, day labels once ticks would repeat the same month.
+ */
+export function axisDateFmt(spanDays: number, rowCount: number): (d: string) => string {
+  const ticks = Math.max(1, Math.min(rowCount - 1, 12));
+  return spanDays / ticks < 28 ? fmtDayShort : fmtDateShort;
+}
+
 export function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -74,4 +88,29 @@ export function daysBetween(fromISO: string, toISO: string): number {
 export function addDays(iso: string, n: number): string {
   const d = new Date(Date.parse(iso + "T00:00:00Z") + n * 86400000);
   return d.toISOString().slice(0, 10);
+}
+
+// ---- shared x-axis time-range presets (Charts + Capital) ----
+
+export type RangeKey = "1m" | "3m" | "6m" | "ytd" | "1y" | "all";
+
+export const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
+  { key: "1m", label: "1M" },
+  { key: "3m", label: "3M" },
+  { key: "6m", label: "6M" },
+  { key: "ytd", label: "YTD" },
+  { key: "1y", label: "1Y" },
+  { key: "all", label: "All" },
+];
+
+/** First date (inclusive) of a range preset; "0000-00-00" sorts before any real date. */
+export function rangeStart(range: RangeKey, today: string): string {
+  switch (range) {
+    case "1m": return addDays(today, -31);
+    case "3m": return addDays(today, -92);
+    case "6m": return addDays(today, -183);
+    case "1y": return addDays(today, -366);
+    case "ytd": return today.slice(0, 4) + "-01-01";
+    case "all": return "0000-00-00";
+  }
 }

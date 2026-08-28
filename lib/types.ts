@@ -136,10 +136,20 @@ export interface CapitalData {
   byCategory: Record<Category, number[]>;
   // market value (EUR) of held shares per category per date
   valueByCategory: Record<Category, number[]>;
+  // per-asset breakdown (only assets with transactions), for the "Assets" split
+  assets: {
+    id: number;
+    name: string;
+    symbol: string;
+    category: Category;
+    invested: number[]; // FIFO cost EUR per date
+    value: number[]; // market value EUR per date
+  }[];
   txnDates: {
     date: string;
     txns: {
       id: number;
+      assetId: number;
       assetName: string;
       symbol: string;
       category: Category;
