@@ -1,11 +1,25 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import { useDark, useJson, useValueMode } from "./hooks";
 import ModeToggle from "./ModeToggle";
-import { fmtEUR, fmtPct, fmtSignedEUR } from "@/lib/format";
+import { fmtDate, fmtDateShort, fmtEUR, fmtPct, fmtSignedEUR } from "@/lib/format";
 import { categoryColor } from "@/lib/palette";
-import { CATEGORY_LABEL, type Holding, type PortfolioSummary, type ReturnStats } from "@/lib/types";
+import { CATEGORIES, CATEGORY_LABEL, type Holding, type PortfolioSummary, type ReturnStats } from "@/lib/types";
+
+const SORT_OPTIONS = [
+  { key: "default", label: "Default order" },
+  { key: "category", label: "Category" },
+  { key: "value", label: "Current value" },
+  { key: "invested", label: "Money put in" },
+  { key: "gain", label: "Gain" },
+  { key: "first", label: "Ann. since 1st buy" },
+  { key: "last", label: "Ann. since last buy" },
+] as const;
+type SortKey = (typeof SORT_OPTIONS)[number]["key"];
+
+const CAT_ORDER = new Map(CATEGORIES.map((c, i) => [c.key, i]));
 
 function Delta({ v, money }: { v: number | null | undefined; money?: boolean }) {
   if (v == null || !isFinite(v)) return <span className="text-muted">—</span>;
@@ -14,22 +28,83 @@ function Delta({ v, money }: { v: number | null | undefined; money?: boolean }) 
 }
 
 /** Annualized rate cell; short holding periods are flagged instead of extrapolated. */
-function Annual({ s }: { s: ReturnStats | null }) {
+function Annual({ s, date }: { s: ReturnStats | null; date?: string | null }) {
+  const when = date ? (
+    <span className="ml-1 text-[10px] text-muted" title={fmtDate(date)}>
+      {fmtDateShort(date)}
+    </span>
+  ) : null;
   if (!s) return <span className="text-muted">—</span>;
   if (s.days < 30)
     return (
       <span className="text-muted" title={`Held only ${s.days} days — annualizing would be noise. Total so far: ${fmtPct(s.totalPct)}`}>
         {fmtPct(s.totalPct)}
         <span className="ml-1 text-[10px]">({s.days}d)</span>
+        {when}
       </span>
     );
-  return <Delta v={s.annualPct} />;
+  return (
+    <>
+      <Delta v={s.annualPct} />
+      {when}
+    </>
+  );
 }
 
 export default function PortfolioView() {
   const { data, error, reload } = useJson<PortfolioSummary>("/api/portfolio");
   const [mode, toggleMode] = useValueMode();
+  const [sortKey, setSortKey] = useState<SortKey>("default");
+  const [sortAsc, setSortAsc] = useState(false);
   const dark = useDark();
+
+  // Restore the last-used sort (shared behavior with the €/% toggle).
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("investapp.portfolioSort");
+      if (!raw) return;
+      const [k, dir] = raw.split(":");
+      if (SORT_OPTIONS.some((o) => o.key === k)) setSortKey(k as SortKey);
+      setSortAsc(dir === "asc");
+    } catch {
+      /* default */
+    }
+  }, []);
+  const setSort = (k: SortKey, asc: boolean) => {
+    setSortKey(k);
+    setSortAsc(asc);
+    try {
+      localStorage.setItem("investapp.portfolioSort", `${k}:${asc ? "asc" : "desc"}`);
+    } catch {
+      /* fine */
+    }
+  };
+
+  const pctMode = mode === "pct";
+  const holdings = data?.holdings;
+  const heldSorted = useMemo(() => {
+    const held = (holdings ?? []).filter((h) => h.quantity > 0 || h.txnCount > 0);
+    if (sortKey === "default") return sortAsc ? [...held].reverse() : held;
+    const val = (h: Holding): number => {
+      switch (sortKey) {
+        case "category":
+          return -(CAT_ORDER.get(h.asset.category) ?? 99); // negated: desc shows CATEGORIES order
+        case "value":
+          return h.valueEUR;
+        case "invested":
+          return h.costEUR;
+        case "gain":
+          return pctMode ? (h.unrealizedPct ?? -Infinity) : h.unrealizedEUR;
+        case "first":
+          return h.sinceFirstBuy?.annualPct ?? -Infinity;
+        case "last":
+          return h.sinceLastBuy?.annualPct ?? -Infinity;
+      }
+    };
+    const arr = [...held].sort((a, b) => val(a) - val(b));
+    if (!sortAsc) arr.reverse();
+    return arr;
+  }, [holdings, sortKey, sortAsc, pctMode]);
 
   if (error)
     return (
@@ -40,15 +115,35 @@ export default function PortfolioView() {
     );
   if (!data) return <p className="p-6 text-sm text-muted">Loading portfolio…</p>;
 
-  const held = data.holdings.filter((h) => h.quantity > 0 || h.txnCount > 0);
   const watch = data.holdings.filter((h) => h.quantity === 0 && h.txnCount === 0);
-  const pct = mode === "pct";
+  const pct = pctMode;
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold tracking-tight">Portfolio</h1>
-        <ModeToggle mode={mode} onToggle={toggleMode} />
+      <div className="flex flex-wrap items-center justify-end gap-3">
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-muted">
+            Sort
+            <select
+              className="rounded-md border border-line bg-surface px-2 py-1 text-sm text-ink2"
+              value={sortKey}
+              onChange={(e) => setSort(e.target.value as SortKey, sortAsc)}
+            >
+              {SORT_OPTIONS.map((o) => (
+                <option key={o.key} value={o.key}>{o.label}</option>
+              ))}
+            </select>
+          </label>
+          <button
+            onClick={() => setSort(sortKey, !sortAsc)}
+            className="rounded-md border border-line bg-surface px-2 py-1 text-sm text-ink2"
+            title={sortAsc ? "Ascending — click for descending" : "Descending — click for ascending"}
+            aria-label="Toggle sort direction"
+          >
+            {sortAsc ? "↑" : "↓"}
+          </button>
+          <ModeToggle mode={mode} onToggle={toggleMode} />
+        </div>
       </div>
 
       {/* Summary tiles */}
@@ -83,20 +178,20 @@ export default function PortfolioView() {
             </tr>
           </thead>
           <tbody>
-            {held.map((h) => (
+            {heldSorted.map((h) => (
               <Row key={h.asset.id} h={h} pct={pct} dark={dark} />
             ))}
           </tbody>
         </table>
-        {held.length === 0 && <Empty />}
+        {heldSorted.length === 0 && <Empty />}
       </div>
 
       {/* Holdings — cards on mobile */}
       <div className="space-y-2 md:hidden">
-        {held.map((h) => (
+        {heldSorted.map((h) => (
           <Card key={h.asset.id} h={h} pct={pct} dark={dark} />
         ))}
-        {held.length === 0 && <div className="rounded-lg border border-line bg-surface"><Empty /></div>}
+        {heldSorted.length === 0 && <div className="rounded-lg border border-line bg-surface"><Empty /></div>}
       </div>
 
       {watch.length > 0 && (
@@ -165,8 +260,8 @@ function Row({ h, pct, dark }: { h: Holding; pct: boolean; dark: boolean }) {
       <td className="tnum px-3 py-2.5 text-right">
         <Delta v={pct ? h.unrealizedPct : h.unrealizedEUR} money={!pct} />
       </td>
-      <td className="tnum px-3 py-2.5 text-right"><Annual s={h.sinceFirstBuy} /></td>
-      <td className="tnum px-3 py-2.5 text-right"><Annual s={h.sinceLastBuy} /></td>
+      <td className="tnum px-3 py-2.5 text-right"><Annual s={h.sinceFirstBuy} date={h.firstBuyDate} /></td>
+      <td className="tnum px-3 py-2.5 text-right"><Annual s={h.sinceLastBuy} date={h.lastBuyDate} /></td>
     </tr>
   );
 }
@@ -186,11 +281,11 @@ function Card({ h, pct, dark }: { h: Holding; pct: boolean; dark: boolean }) {
       <div className="mt-2 grid grid-cols-2 gap-1 text-xs">
         <div>
           <div className="text-muted">Ann. 1st buy</div>
-          <div className="tnum"><Annual s={h.sinceFirstBuy} /></div>
+          <div className="tnum"><Annual s={h.sinceFirstBuy} date={h.firstBuyDate} /></div>
         </div>
         <div>
           <div className="text-muted">Ann. last buy</div>
-          <div className="tnum"><Annual s={h.sinceLastBuy} /></div>
+          <div className="tnum"><Annual s={h.sinceLastBuy} date={h.lastBuyDate} /></div>
         </div>
       </div>
     </Link>
