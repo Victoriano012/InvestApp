@@ -91,3 +91,5 @@ page (they land in the "Basket" category). In charts, a basket's aggregate line 
   earlier close if markets were shut), so derived quantities can differ
   slightly from your broker's fill — edit the transaction if you need the
   exact quantity.
+
+Coded using Claude.
