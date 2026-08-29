@@ -1,41 +1,50 @@
 // One-time migration: copy the local SQLite database into Neon Postgres,
-// owned by your Google account's email.
+// encrypted, owned by your Google account's email.
 //
-//   DATABASE_URL=postgres://... OWNER_EMAIL=you@gmail.com node scripts/push-to-neon.mjs [sqlite-file]
+//   DATABASE_URL=postgres://... DATA_ENCRYPTION_KEY=<base64> OWNER_EMAIL=you@gmail.com \
+//     node scripts/push-to-neon.mjs [sqlite-file]
 //
 // Idempotent: re-running wipes and re-imports that user's assets/transactions.
 import Database from "better-sqlite3";
 import { neon } from "@neondatabase/serverless";
+import { createCipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto";
 import path from "node:path";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const OWNER_EMAIL = process.env.OWNER_EMAIL?.toLowerCase();
-if (!DATABASE_URL || !OWNER_EMAIL) {
-  console.error("Usage: DATABASE_URL=postgres://... OWNER_EMAIL=you@gmail.com node scripts/push-to-neon.mjs [sqlite-file]");
+const KEY = process.env.DATA_ENCRYPTION_KEY;
+if (!DATABASE_URL || !OWNER_EMAIL || !KEY) {
+  console.error(
+    "Usage: DATABASE_URL=postgres://... DATA_ENCRYPTION_KEY=<base64> OWNER_EMAIL=you@gmail.com node scripts/push-to-neon.mjs [sqlite-file]"
+  );
   process.exit(1);
 }
 const file = process.argv[2] ?? path.join(process.cwd(), "data", "investapp.db");
 
-// Keep in sync with SCHEMA in lib/db.ts.
+// Keep crypto + schema in sync with lib/crypto.ts and lib/db.ts.
+const master = Buffer.from(KEY, "base64");
+if (master.length < 32) throw new Error("DATA_ENCRYPTION_KEY must be >= 32 bytes of base64");
+const userKey = (uid) => Buffer.from(hkdfSync("sha256", master, "investapp-v1", `user:${uid}`, 32));
+function encrypt(uid, value) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", userKey(uid), iv);
+  const ct = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), ct]).toString("base64");
+}
+const digest = (uid, value) => createHmac("sha256", userKey(uid)).update(value).digest("hex");
+
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT)`,
   `CREATE TABLE IF NOT EXISTS assets (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    symbol TEXT NOT NULL, name TEXT NOT NULL, short_name TEXT,
-    category TEXT NOT NULL, currency TEXT NOT NULL DEFAULT 'USD',
-    sort INTEGER NOT NULL DEFAULT 0, kind TEXT NOT NULL DEFAULT 'single',
-    UNIQUE (user_id, symbol))`,
+    symbol_h TEXT NOT NULL, sort INTEGER NOT NULL DEFAULT 0, enc TEXT NOT NULL,
+    UNIQUE (user_id, symbol_h))`,
   `CREATE TABLE IF NOT EXISTS transactions (
     id SERIAL PRIMARY KEY,
     asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-    type TEXT NOT NULL CHECK (type IN ('buy','sell')),
-    date TEXT NOT NULL,
-    quantity DOUBLE PRECISION NOT NULL CHECK (quantity > 0),
-    price DOUBLE PRECISION NOT NULL CHECK (price >= 0),
-    fees DOUBLE PRECISION NOT NULL DEFAULT 0,
-    note TEXT, paid_amount DOUBLE PRECISION, paid_currency TEXT)`,
-  `CREATE INDEX IF NOT EXISTS idx_txn_asset_date ON transactions(asset_id, date)`,
+    enc TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS idx_txn_asset ON transactions(asset_id)`,
   `CREATE TABLE IF NOT EXISTS price_history (
     symbol TEXT NOT NULL, date TEXT NOT NULL, close DOUBLE PRECISION NOT NULL,
     PRIMARY KEY (symbol, date))`,
@@ -46,8 +55,8 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS basket_components (
     id SERIAL PRIMARY KEY,
     asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-    symbol TEXT NOT NULL, name TEXT NOT NULL,
-    UNIQUE (asset_id, symbol))`,
+    symbol_h TEXT NOT NULL, enc TEXT NOT NULL,
+    UNIQUE (asset_id, symbol_h))`,
 ];
 
 const sqlite = new Database(file, { readonly: true, fileMustExist: true });
@@ -68,10 +77,17 @@ await sql.query(`DELETE FROM assets WHERE user_id = $1`, [uid]);
 const assets = sqlite.prepare("SELECT * FROM assets ORDER BY sort, id").all();
 const idMap = new Map();
 for (const a of assets) {
+  const payload = {
+    symbol: a.symbol,
+    name: a.name,
+    short_name: a.short_name ?? null,
+    category: a.category,
+    currency: a.currency,
+    kind: a.kind ?? "single",
+  };
   const [row] = await sql.query(
-    `INSERT INTO assets (user_id, symbol, name, short_name, category, currency, sort, kind)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-    [uid, a.symbol, a.name, a.short_name ?? null, a.category, a.currency, a.sort, a.kind ?? "single"]
+    `INSERT INTO assets (user_id, symbol_h, sort, enc) VALUES ($1, $2, $3, $4) RETURNING id`,
+    [uid, digest(uid, a.symbol), a.sort, encrypt(uid, payload)]
   );
   idMap.set(a.id, row.id);
 }
@@ -79,26 +95,34 @@ console.log(`assets: ${assets.length}`);
 
 const txns = sqlite.prepare("SELECT * FROM transactions ORDER BY date, id").all();
 for (const t of txns) {
-  await sql.query(
-    `INSERT INTO transactions (asset_id, type, date, quantity, price, fees, note, paid_amount, paid_currency)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-    [idMap.get(t.asset_id), t.type, t.date, t.quantity, t.price, t.fees ?? 0, t.note ?? null,
-     t.paid_amount ?? null, t.paid_currency ?? null]
-  );
+  const payload = {
+    type: t.type,
+    date: t.date,
+    quantity: t.quantity,
+    price: t.price,
+    fees: t.fees ?? 0,
+    note: t.note ?? null,
+    paid_amount: t.paid_amount ?? null,
+    paid_currency: t.paid_currency ?? null,
+  };
+  await sql.query(`INSERT INTO transactions (asset_id, enc) VALUES ($1, $2)`, [
+    idMap.get(t.asset_id),
+    encrypt(uid, payload),
+  ]);
 }
 console.log(`transactions: ${txns.length}`);
 
 const comps = sqlite.prepare("SELECT * FROM basket_components").all();
 for (const c of comps) {
   await sql.query(
-    `INSERT INTO basket_components (asset_id, symbol, name) VALUES ($1, $2, $3)
-     ON CONFLICT (asset_id, symbol) DO UPDATE SET name = EXCLUDED.name`,
-    [idMap.get(c.asset_id), c.symbol, c.name]
+    `INSERT INTO basket_components (asset_id, symbol_h, enc) VALUES ($1, $2, $3)
+     ON CONFLICT (asset_id, symbol_h) DO UPDATE SET enc = EXCLUDED.enc`,
+    [idMap.get(c.asset_id), digest(uid, c.symbol), encrypt(uid, { symbol: c.symbol, name: c.name })]
   );
 }
 console.log(`basket components: ${comps.length}`);
 
-// Shared market-data cache: price history (bulk), quotes, hist:* sync markers.
+// Shared public market-data cache: price history (bulk), quotes, hist:* markers.
 const hist = sqlite.prepare("SELECT symbol, date, close FROM price_history").all();
 for (let i = 0; i < hist.length; i += 500) {
   const chunk = hist.slice(i, i + 500);

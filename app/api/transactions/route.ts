@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
   const b = await req.json();
   const err = await validate(uid, b);
   if (err) return NextResponse.json({ error: err }, { status: 400 });
-  const txn = await createTxn({
+  const txn = await createTxn(uid, {
     asset_id: Number(b.asset_id),
     type: b.type,
     date: b.date,

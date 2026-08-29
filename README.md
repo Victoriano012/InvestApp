@@ -31,14 +31,25 @@ AUTH_SECRET=dev AUTH_DEV_USER=you@example.com npm run dev
    `https://<your-app>.vercel.app/api/auth/callback/google`.
 4. **Env vars** (Vercel → Settings → Environment Variables):
    `AUTH_SECRET` (`openssl rand -base64 32`), `AUTH_GOOGLE_ID`,
-   `AUTH_GOOGLE_SECRET`.
+   `AUTH_GOOGLE_SECRET`, and `DATA_ENCRYPTION_KEY`
+   (`openssl rand -base64 32` — **back this one up**: portfolio data in the
+   DB is encrypted with it and is unrecoverable without it).
 5. **Migrate existing data** (optional): copy your old SQLite file's contents
-   into Neon, owned by your Google email:
+   into Neon, encrypted, owned by your Google email:
 
    ```bash
-   DATABASE_URL=postgres://... OWNER_EMAIL=you@gmail.com \
-     node scripts/push-to-neon.mjs data/investapp.db
+   DATABASE_URL=postgres://... DATA_ENCRYPTION_KEY=<same as Vercel> \
+     OWNER_EMAIL=you@gmail.com node scripts/push-to-neon.mjs data/investapp.db
    ```
+
+## Encryption
+
+Per-user portfolio data (assets, transactions, basket components) is stored
+encrypted (AES-256-GCM): each user's rows use a key derived from
+`DATA_ENCRYPTION_KEY` + their user id, so the database alone holds only
+ciphertext and one user's key opens nothing of another's. Shared market data
+(price history, quote cache) and the sign-in email are plain — they're
+public / needed for login.
 
 ## Pages
 

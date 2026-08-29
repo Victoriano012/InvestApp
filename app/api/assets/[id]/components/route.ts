@@ -12,7 +12,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
   const { id } = await params;
   const asset = await getAsset(uid, Number(id));
   if (!asset) return NextResponse.json({ error: "not found" }, { status: 404 });
-  return NextResponse.json(await listBasketComponents(Number(id)));
+  return NextResponse.json(await listBasketComponents(uid, Number(id)));
 }
 
 export async function POST(req: NextRequest, { params }: Params) {
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   const b = await req.json();
   if (!b?.symbol || typeof b.symbol !== "string")
     return NextResponse.json({ error: "symbol required" }, { status: 400 });
-  const c = await addBasketComponent(Number(id), b.symbol.trim(), (b.name || b.symbol).trim());
+  const c = await addBasketComponent(uid, Number(id), b.symbol.trim(), (b.name || b.symbol).trim());
   return NextResponse.json(c, { status: 201 });
 }
 
@@ -38,6 +38,6 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   if (!asset) return NextResponse.json({ error: "not found" }, { status: 404 });
   const symbol = req.nextUrl.searchParams.get("symbol");
   if (!symbol) return NextResponse.json({ error: "symbol query param required" }, { status: 400 });
-  await removeBasketComponent(Number(id), symbol);
+  await removeBasketComponent(uid, Number(id), symbol);
   return NextResponse.json({ ok: true });
 }

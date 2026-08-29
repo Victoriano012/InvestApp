@@ -316,7 +316,7 @@ export async function basketUnitValueOn(
   assetId: number,
   date: string
 ): Promise<number | null> {
-  const comps = await listBasketComponents(assetId);
+  const comps = await listBasketComponents(uid, assetId);
   const txns = (await listTxns(uid, assetId)).filter((t) => t.date <= date);
   if (!comps.length || !txns.length) return null;
   const from = txns[0].date;
@@ -422,7 +422,7 @@ export async function getPortfolio(uid: number): Promise<PortfolioSummary> {
 
   const baskets = new Map<number, BasketComponent[]>();
   for (const a of assets)
-    if (a.kind === "basket") baskets.set(a.id, await listBasketComponents(a.id));
+    if (a.kind === "basket") baskets.set(a.id, await listBasketComponents(uid, a.id));
   const compSymbols = [...new Set([...baskets.values()].flat().map((c) => c.symbol))];
 
   await ensureAllHistory([], minDate); // FX
@@ -547,7 +547,7 @@ export async function getExplorerData(uid: number): Promise<ExplorerData> {
 
   const baskets = new Map<number, BasketComponent[]>();
   for (const a of assets)
-    if (a.kind === "basket") baskets.set(a.id, await listBasketComponents(a.id));
+    if (a.kind === "basket") baskets.set(a.id, await listBasketComponents(uid, a.id));
   const compSymbols = [...new Set([...baskets.values()].flat().map((c) => c.symbol))];
 
   const ownSymbols = assets.filter((a) => a.kind !== "basket").map((a) => a.symbol);
@@ -702,7 +702,7 @@ export async function getCapitalData(uid: number): Promise<CapitalData> {
   const from = txns.reduce((m, t) => (t.date < m ? t.date : m), today);
   const baskets = new Map<number, BasketComponent[]>();
   for (const a of assets)
-    if (a.kind === "basket") baskets.set(a.id, await listBasketComponents(a.id));
+    if (a.kind === "basket") baskets.set(a.id, await listBasketComponents(uid, a.id));
   const compSymbols = [...new Set([...baskets.values()].flat().map((c) => c.symbol))];
   const txnAssetIds = new Set(txns.map((t) => t.asset_id));
   // Market value needs each traded asset's price history, not just FX + baskets.

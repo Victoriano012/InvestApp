@@ -11,10 +11,18 @@ Postgres.
 - `lib/db.ts` — async Postgres layer: Neon serverless driver when
   `DATABASE_URL` is set, embedded PGlite at `data/pg` otherwise (override dir
   with `INVESTAPP_PG_DIR` — used by tests). Schema (auto-created) + CRUD.
-  Tables: `users`, `assets` (user_id, UNIQUE(user_id, symbol)),
-  `transactions`, `basket_components`, and shared market-data caches
-  `price_history`, `quotes` (5-min TTL), `meta`. `assets`/`transactions`
-  CRUD is scoped by user id; price/quote/meta caches are global.
+  Tables: `users`, `assets`, `transactions`, `basket_components`, and shared
+  market-data caches `price_history`, `quotes` (5-min TTL), `meta`.
+  `assets`/`transactions` CRUD is scoped by user id; price/quote/meta caches
+  are global.
+- `lib/crypto.ts` — per-user encryption: each user's asset/txn/component row
+  contents live in one AES-256-GCM `enc` blob, key =
+  HKDF(`DATA_ENCRYPTION_KEY`, user id); deterministic per-user HMAC
+  `symbol_h` columns carry the UNIQUE constraints. Consequences: SQL can't
+  filter/sort on encrypted fields (txns sort by date in JS), and
+  `createTxn`/basket-component fns take `uid`. Market data and users.email
+  stay plain (public / login lookup). Missing key: throws in prod, fixed
+  insecure dev key with local PGlite.
 - `auth.ts` — Auth.js v5 with Google provider, JWT sessions; `jwt` callback
   maps the Google email to a `users` row (`getOrCreateUser`), `session.uid`
   carries the db user id. `currentUserId()` is what routes call;

@@ -1,8 +1,16 @@
 import path from "node:path";
+import { decrypt, digest, encrypt } from "./crypto";
 import type { Asset, BasketComponent, Txn } from "./types";
 
 // Postgres: Neon over HTTP in production (DATABASE_URL), embedded PGlite for
 // local dev/tests (persisted under data/pg, override with INVESTAPP_PG_DIR).
+//
+// Per-user data (assets, transactions, basket components) is stored as an
+// encrypted `enc` blob per row (lib/crypto.ts) — the DB alone holds only
+// ciphertext. Plain columns are limited to ids/foreign keys, `sort`, and
+// deterministic `symbol_h` digests used for uniqueness. Market data
+// (price_history, quotes, hist:* meta) is public and shared, so it stays
+// plain; users.email stays plain because it's the sign-in lookup key.
 
 type Row = Record<string, unknown>;
 type Query = (text: string, params?: unknown[]) => Promise<Row[]>;
@@ -17,28 +25,17 @@ export const SCHEMA: string[] = [
   `CREATE TABLE IF NOT EXISTS assets (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    symbol TEXT NOT NULL,
-    name TEXT NOT NULL,
-    short_name TEXT,
-    category TEXT NOT NULL,
-    currency TEXT NOT NULL DEFAULT 'USD',
+    symbol_h TEXT NOT NULL,
     sort INTEGER NOT NULL DEFAULT 0,
-    kind TEXT NOT NULL DEFAULT 'single',
-    UNIQUE (user_id, symbol)
+    enc TEXT NOT NULL,
+    UNIQUE (user_id, symbol_h)
   )`,
   `CREATE TABLE IF NOT EXISTS transactions (
     id SERIAL PRIMARY KEY,
     asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-    type TEXT NOT NULL CHECK (type IN ('buy','sell')),
-    date TEXT NOT NULL,
-    quantity DOUBLE PRECISION NOT NULL CHECK (quantity > 0),
-    price DOUBLE PRECISION NOT NULL CHECK (price >= 0),
-    fees DOUBLE PRECISION NOT NULL DEFAULT 0,
-    note TEXT,
-    paid_amount DOUBLE PRECISION,
-    paid_currency TEXT
+    enc TEXT NOT NULL
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_txn_asset_date ON transactions(asset_id, date)`,
+  `CREATE INDEX IF NOT EXISTS idx_txn_asset ON transactions(asset_id)`,
   `CREATE TABLE IF NOT EXISTS price_history (
     symbol TEXT NOT NULL,
     date TEXT NOT NULL,
@@ -56,9 +53,9 @@ export const SCHEMA: string[] = [
   `CREATE TABLE IF NOT EXISTS basket_components (
     id SERIAL PRIMARY KEY,
     asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-    symbol TEXT NOT NULL,
-    name TEXT NOT NULL,
-    UNIQUE (asset_id, symbol)
+    symbol_h TEXT NOT NULL,
+    enc TEXT NOT NULL,
+    UNIQUE (asset_id, symbol_h)
   )`,
 ];
 
@@ -104,28 +101,50 @@ export async function getOrCreateUser(email: string, name: string | null): Promi
   return r!.id;
 }
 
-// ---- assets (scoped to the logged-in user) ----
+// ---- assets (scoped to the logged-in user, contents encrypted) ----
+
+type AssetPayload = Omit<Asset, "id" | "sort">;
+type AssetRow = { id: number; sort: number; enc: string };
+
+function rowToAsset(uid: number, r: AssetRow): Asset {
+  return { id: r.id, sort: r.sort, ...decrypt<AssetPayload>(uid, r.enc) };
+}
 
 export async function listAssets(uid: number): Promise<Asset[]> {
-  return (await q("SELECT * FROM assets WHERE user_id = $1 ORDER BY sort, id", [uid])) as unknown as Asset[];
+  const rows = (await q(
+    "SELECT id, sort, enc FROM assets WHERE user_id = $1 ORDER BY sort, id",
+    [uid]
+  )) as AssetRow[];
+  return rows.map((r) => rowToAsset(uid, r));
 }
 
 export async function getAsset(uid: number, id: number): Promise<Asset | undefined> {
-  return one<Asset>("SELECT * FROM assets WHERE user_id = $1 AND id = $2", [uid, id]);
+  const r = await one<AssetRow>(
+    "SELECT id, sort, enc FROM assets WHERE user_id = $1 AND id = $2",
+    [uid, id]
+  );
+  return r && rowToAsset(uid, r);
 }
 
 export async function createAsset(
   uid: number,
   a: Omit<Asset, "id" | "sort" | "kind"> & { kind?: Asset["kind"] }
 ): Promise<Asset> {
-  const r = await one<Asset>(
-    `INSERT INTO assets (user_id, symbol, name, short_name, category, currency, sort, kind)
-     VALUES ($1, $2, $3, $4, $5, $6,
-       (SELECT COALESCE(MAX(sort), 0) + 1 FROM assets WHERE user_id = $1), $7)
-     RETURNING *`,
-    [uid, a.symbol, a.name, a.short_name ?? null, a.category, a.currency, a.kind ?? "single"]
+  const payload: AssetPayload = {
+    symbol: a.symbol,
+    name: a.name,
+    short_name: a.short_name ?? null,
+    category: a.category,
+    currency: a.currency,
+    kind: a.kind ?? "single",
+  };
+  const r = await one<AssetRow>(
+    `INSERT INTO assets (user_id, symbol_h, sort, enc)
+     VALUES ($1, $2, (SELECT COALESCE(MAX(sort), 0) + 1 FROM assets WHERE user_id = $1), $3)
+     RETURNING id, sort, enc`,
+    [uid, digest(uid, a.symbol), encrypt(uid, payload)]
   );
-  return r!;
+  return rowToAsset(uid, r!);
 }
 
 export async function updateAsset(
@@ -136,77 +155,124 @@ export async function updateAsset(
   const cur = await getAsset(uid, id);
   if (!cur) return undefined;
   const next = { ...cur, ...patch };
-  return one<Asset>(
-    `UPDATE assets SET symbol = $1, name = $2, short_name = $3, category = $4, currency = $5, sort = $6
-     WHERE user_id = $7 AND id = $8 RETURNING *`,
-    [next.symbol, next.name, next.short_name ?? null, next.category, next.currency, next.sort, uid, id]
+  const payload: AssetPayload = {
+    symbol: next.symbol,
+    name: next.name,
+    short_name: next.short_name ?? null,
+    category: next.category,
+    currency: next.currency,
+    kind: next.kind,
+  };
+  const r = await one<AssetRow>(
+    `UPDATE assets SET symbol_h = $1, sort = $2, enc = $3
+     WHERE user_id = $4 AND id = $5 RETURNING id, sort, enc`,
+    [digest(uid, next.symbol), next.sort, encrypt(uid, payload), uid, id]
   );
+  return r && rowToAsset(uid, r);
 }
 
 export async function deleteAsset(uid: number, id: number): Promise<void> {
   await q("DELETE FROM assets WHERE user_id = $1 AND id = $2", [uid, id]);
 }
 
-// ---- basket components (ownership checked by callers via getAsset) ----
+// ---- basket components (via asset ownership, contents encrypted) ----
 
-export async function listBasketComponents(assetId: number): Promise<BasketComponent[]> {
-  return (await q(
-    "SELECT * FROM basket_components WHERE asset_id = $1 ORDER BY name, id",
-    [assetId]
-  )) as unknown as BasketComponent[];
+type CompPayload = { symbol: string; name: string };
+type CompRow = { id: number; asset_id: number; enc: string };
+
+function rowToComp(uid: number, r: CompRow): BasketComponent {
+  return { id: r.id, asset_id: r.asset_id, ...decrypt<CompPayload>(uid, r.enc) };
+}
+
+export async function listBasketComponents(uid: number, assetId: number): Promise<BasketComponent[]> {
+  const rows = (await q(
+    `SELECT c.id, c.asset_id, c.enc FROM basket_components c
+     JOIN assets a ON a.id = c.asset_id
+     WHERE a.user_id = $1 AND c.asset_id = $2`,
+    [uid, assetId]
+  )) as CompRow[];
+  return rows
+    .map((r) => rowToComp(uid, r))
+    .sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : x.id - y.id));
 }
 
 export async function addBasketComponent(
+  uid: number,
   assetId: number,
   symbol: string,
   name: string
 ): Promise<BasketComponent> {
-  const r = await one<BasketComponent>(
-    `INSERT INTO basket_components (asset_id, symbol, name) VALUES ($1, $2, $3)
-     ON CONFLICT (asset_id, symbol) DO UPDATE SET name = EXCLUDED.name RETURNING *`,
-    [assetId, symbol, name]
+  const r = await one<CompRow>(
+    `INSERT INTO basket_components (asset_id, symbol_h, enc) VALUES ($1, $2, $3)
+     ON CONFLICT (asset_id, symbol_h) DO UPDATE SET enc = EXCLUDED.enc
+     RETURNING id, asset_id, enc`,
+    [assetId, digest(uid, symbol), encrypt(uid, { symbol, name })]
   );
-  return r!;
+  return rowToComp(uid, r!);
 }
 
-export async function removeBasketComponent(assetId: number, symbol: string): Promise<void> {
-  await q("DELETE FROM basket_components WHERE asset_id = $1 AND symbol = $2", [assetId, symbol]);
+export async function removeBasketComponent(uid: number, assetId: number, symbol: string): Promise<void> {
+  await q("DELETE FROM basket_components WHERE asset_id = $1 AND symbol_h = $2", [
+    assetId,
+    digest(uid, symbol),
+  ]);
 }
 
-// ---- transactions (scoped through asset ownership) ----
+// ---- transactions (scoped through asset ownership, contents encrypted) ----
+
+type TxnPayload = Omit<Txn, "id" | "asset_id">;
+type TxnRow = { id: number; asset_id: number; enc: string };
+
+function rowToTxn(uid: number, r: TxnRow): Txn {
+  return { id: r.id, asset_id: r.asset_id, ...decrypt<TxnPayload>(uid, r.enc) };
+}
+
+const byDateThenId = (a: Txn, b: Txn) =>
+  a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id;
 
 export async function listTxns(uid: number, assetId?: number): Promise<Txn[]> {
-  if (assetId != null)
-    return (await q(
-      `SELECT t.* FROM transactions t JOIN assets a ON a.id = t.asset_id
-       WHERE a.user_id = $1 AND t.asset_id = $2 ORDER BY t.date, t.id`,
-      [uid, assetId]
-    )) as unknown as Txn[];
-  return (await q(
-    `SELECT t.* FROM transactions t JOIN assets a ON a.id = t.asset_id
-     WHERE a.user_id = $1 ORDER BY t.date, t.id`,
-    [uid]
-  )) as unknown as Txn[];
+  const rows = (assetId != null
+    ? await q(
+        `SELECT t.id, t.asset_id, t.enc FROM transactions t JOIN assets a ON a.id = t.asset_id
+         WHERE a.user_id = $1 AND t.asset_id = $2`,
+        [uid, assetId]
+      )
+    : await q(
+        `SELECT t.id, t.asset_id, t.enc FROM transactions t JOIN assets a ON a.id = t.asset_id
+         WHERE a.user_id = $1`,
+        [uid]
+      )) as TxnRow[];
+  return rows.map((r) => rowToTxn(uid, r)).sort(byDateThenId);
 }
 
 export async function getTxn(uid: number, id: number): Promise<Txn | undefined> {
-  return one<Txn>(
-    `SELECT t.* FROM transactions t JOIN assets a ON a.id = t.asset_id
+  const r = await one<TxnRow>(
+    `SELECT t.id, t.asset_id, t.enc FROM transactions t JOIN assets a ON a.id = t.asset_id
      WHERE a.user_id = $1 AND t.id = $2`,
     [uid, id]
   );
+  return r && rowToTxn(uid, r);
 }
 
-export async function createTxn(t: Omit<Txn, "id">): Promise<Txn> {
-  const r = await one<Txn>(
-    `INSERT INTO transactions (asset_id, type, date, quantity, price, fees, note, paid_amount, paid_currency)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-    [
-      t.asset_id, t.type, t.date, t.quantity, t.price, t.fees ?? 0, t.note ?? null,
-      t.paid_amount ?? null, t.paid_currency ?? null,
-    ]
+function txnPayload(t: Omit<Txn, "id" | "asset_id">): TxnPayload {
+  return {
+    type: t.type,
+    date: t.date,
+    quantity: t.quantity,
+    price: t.price,
+    fees: t.fees ?? 0,
+    note: t.note ?? null,
+    paid_amount: t.paid_amount ?? null,
+    paid_currency: t.paid_currency ?? null,
+  };
+}
+
+export async function createTxn(uid: number, t: Omit<Txn, "id">): Promise<Txn> {
+  const r = await one<TxnRow>(
+    "INSERT INTO transactions (asset_id, enc) VALUES ($1, $2) RETURNING id, asset_id, enc",
+    [t.asset_id, encrypt(uid, txnPayload(t))]
   );
-  return r!;
+  return rowToTxn(uid, r!);
 }
 
 export async function updateTxn(
@@ -217,15 +283,11 @@ export async function updateTxn(
   const cur = await getTxn(uid, id);
   if (!cur) return undefined;
   const next = { ...cur, ...patch };
-  return one<Txn>(
-    `UPDATE transactions SET asset_id = $1, type = $2, date = $3, quantity = $4, price = $5,
-       fees = $6, note = $7, paid_amount = $8, paid_currency = $9
-     WHERE id = $10 RETURNING *`,
-    [
-      next.asset_id, next.type, next.date, next.quantity, next.price, next.fees, next.note,
-      next.paid_amount ?? null, next.paid_currency ?? null, id,
-    ]
+  const r = await one<TxnRow>(
+    "UPDATE transactions SET asset_id = $1, enc = $2 WHERE id = $3 RETURNING id, asset_id, enc",
+    [next.asset_id, encrypt(uid, txnPayload(next)), id]
   );
+  return r && rowToTxn(uid, r);
 }
 
 export async function deleteTxn(uid: number, id: number): Promise<void> {
@@ -236,7 +298,7 @@ export async function deleteTxn(uid: number, id: number): Promise<void> {
   );
 }
 
-// ---- price history & quote cache (shared market data, not per-user) ----
+// ---- price history & quote cache (shared public market data, plain) ----
 
 export async function getHistory(symbol: string): Promise<{ date: string; close: number }[]> {
   return (await q(
