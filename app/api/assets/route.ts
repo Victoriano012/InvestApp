@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { currentUserId } from "@/auth";
 import { createAsset, listAssets } from "@/lib/db";
 import { symbolCurrency } from "@/lib/market";
 import { CATEGORIES } from "@/lib/types";
@@ -6,10 +7,14 @@ import { CATEGORIES } from "@/lib/types";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  return NextResponse.json(listAssets());
+  const uid = await currentUserId();
+  if (uid == null) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  return NextResponse.json(await listAssets(uid));
 }
 
 export async function POST(req: NextRequest) {
+  const uid = await currentUserId();
+  if (uid == null) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const b = await req.json();
   if (!CATEGORIES.some((c) => c.key === b.category))
     return NextResponse.json({ error: "invalid category" }, { status: 400 });
@@ -20,7 +25,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "name required" }, { status: 400 });
     const slug = b.name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "");
     try {
-      const asset = createAsset({
+      const asset = await createAsset(uid, {
         symbol: `BASKET:${slug || Date.now()}`,
         name: b.name.trim(),
         short_name: null,
@@ -38,7 +43,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "symbol required" }, { status: 400 });
   const currency = b.currency || (await symbolCurrency(b.symbol)) || "USD";
   try {
-    const asset = createAsset({
+    const asset = await createAsset(uid, {
       symbol: b.symbol.trim(),
       name: (b.name || b.symbol).trim(),
       short_name: null,

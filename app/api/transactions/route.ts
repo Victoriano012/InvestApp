@@ -1,18 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
+import { currentUserId } from "@/auth";
 import { createTxn, getAsset, listTxns } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
+  const uid = await currentUserId();
+  if (uid == null) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const assetId = req.nextUrl.searchParams.get("asset");
-  return NextResponse.json(listTxns(assetId ? Number(assetId) : undefined));
+  return NextResponse.json(await listTxns(uid, assetId ? Number(assetId) : undefined));
 }
 
 export async function POST(req: NextRequest) {
+  const uid = await currentUserId();
+  if (uid == null) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const b = await req.json();
-  const err = validate(b);
+  const err = await validate(uid, b);
   if (err) return NextResponse.json({ error: err }, { status: 400 });
-  const txn = createTxn({
+  const txn = await createTxn({
     asset_id: Number(b.asset_id),
     type: b.type,
     date: b.date,
@@ -26,10 +31,10 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(txn, { status: 201 });
 }
 
-function validate(b: Record<string, unknown>): string | null {
+async function validate(uid: number, b: Record<string, unknown>): Promise<string | null> {
   if (!b) return "missing body";
   if (b.type !== "buy" && b.type !== "sell") return "type must be buy or sell";
-  if (!getAsset(Number(b.asset_id))) return "unknown asset";
+  if (!(await getAsset(uid, Number(b.asset_id)))) return "unknown asset";
   if (typeof b.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(b.date)) return "date must be YYYY-MM-DD";
   if (b.date > new Date().toISOString().slice(0, 10)) return "date is in the future";
   if (!(Number(b.quantity) > 0)) return "quantity must be > 0";

@@ -1,21 +1,44 @@
 # InvestApp
 
-Personal investment tracker. Transactions are entered manually (no bank/broker
+Investment tracker. Transactions are entered manually (no bank/broker
 connections); market prices are fetched automatically from Yahoo Finance and
-cached locally. Everything is computed in EUR (USD assets converted at the
-daily EURUSD rate).
+cached. Everything is computed in EUR (USD assets converted at the
+daily EURUSD rate). Multi-user: everyone signs in with Google and sees only
+their own portfolio.
 
-## Run it
+## Run it locally
 
 ```bash
 npm install
 npm run dev        # http://localhost:3000
 ```
 
-For a permanent setup: `npm run build && npm start`.
+Locally the database is an embedded Postgres (PGlite) persisted under
+`data/pg` (git-ignored) — no server to install. Sign-in needs either real
+Google OAuth env vars (see below) or the dev bypass:
 
-Your data lives in a single SQLite file at `data/investapp.db` (git-ignored).
-Back that file up and you've backed up everything.
+```bash
+AUTH_SECRET=dev AUTH_DEV_USER=you@example.com npm run dev
+```
+
+## Deploy (Vercel + Neon + Google)
+
+1. **Vercel**: push the repo to GitHub, import it at vercel.com.
+2. **Neon**: in the Vercel project → Storage → Create Database → Neon
+   (free tier). This sets `DATABASE_URL` automatically.
+3. **Google OAuth**: in [Google Cloud Console](https://console.cloud.google.com)
+   create OAuth credentials (Web application) with redirect URI
+   `https://<your-app>.vercel.app/api/auth/callback/google`.
+4. **Env vars** (Vercel → Settings → Environment Variables):
+   `AUTH_SECRET` (`openssl rand -base64 32`), `AUTH_GOOGLE_ID`,
+   `AUTH_GOOGLE_SECRET`.
+5. **Migrate existing data** (optional): copy your old SQLite file's contents
+   into Neon, owned by your Google email:
+
+   ```bash
+   DATABASE_URL=postgres://... OWNER_EMAIL=you@gmail.com \
+     node scripts/push-to-neon.mjs data/investapp.db
+   ```
 
 ## Pages
 

@@ -34,6 +34,9 @@ export default function Nav() {
               {it.label}
             </Link>
           ))}
+          <a href="/api/auth/signout" className="ml-auto text-xs text-muted hover:text-ink2">
+            Sign out
+          </a>
         </div>
       </header>
 
