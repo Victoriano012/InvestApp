@@ -590,7 +590,7 @@ function DateField({
       <button
         onClick={() => setOpen(!open)}
         title={title}
-        className="rounded-md border border-line bg-surface px-2.5 py-1 tabular-nums text-ink2 hover:border-accent/50"
+        className="rounded-md border border-line bg-surface px-2.5 py-1 tabular-nums text-ink2 hover:border-accent/50 max-sm:px-1.5 max-sm:text-xs"
       >
         <span className="max-sm:hidden">{value ? fmtDate(value) : "…"}</span>
         <span className="sm:hidden">{value ? fmtDateNum(value) : "…"}</span>
@@ -674,7 +674,7 @@ export default function RangeControl({
         ))}
       </span>
       {/* One flex item, so on a narrow screen the pair wraps as a unit. */}
-      <span className="flex items-center gap-1.5">
+      <span className="flex items-center gap-1.5 max-sm:gap-1">
         <DateField
           value={showFrom}
           min={min}
