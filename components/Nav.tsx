@@ -30,10 +30,10 @@ export default function Nav() {
 
   return (
     <>
-      {/* Mobile top bar: just the current tab's title */}
-      <header className="sticky top-0 z-20 border-b border-line bg-surface pt-[env(safe-area-inset-top)] md:hidden">
-        <h1 className="py-2 text-center text-sm font-semibold tracking-tight">{title}</h1>
-      </header>
+      {/* Mobile: the current tab's title as a large heading that scrolls with the page */}
+      <div className="mx-auto w-full max-w-6xl px-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] md:hidden">
+        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+      </div>
 
       {/* Desktop top bar */}
       <header className="hidden md:block sticky top-0 z-20 border-b border-line bg-surface/90 backdrop-blur">
