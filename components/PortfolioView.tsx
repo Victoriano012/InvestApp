@@ -134,7 +134,7 @@ export default function PortfolioView() {
             : fmtSignedEUR(data.totalUnrealizedEUR)}
           tone={data.totalUnrealizedEUR}
         />
-        <Tile label="Invested" value={fmtEUR(data.totalInvestedEUR)} sub={data.totalRealizedEUR !== 0 ? `realized ${fmtSignedEUR(data.totalRealizedEUR)}` : undefined} className="col-span-2 md:col-span-1" />
+        <Tile label="Invested" value={fmtEUR(data.totalInvestedEUR)} sub={data.totalRealizedEUR !== 0 ? `realized ${fmtSignedEUR(data.totalRealizedEUR)}` : undefined} className="hidden md:block md:col-span-1" />
       </div>
 
       <div className="flex flex-wrap items-center justify-end gap-3">
