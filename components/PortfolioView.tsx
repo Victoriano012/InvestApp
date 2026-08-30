@@ -178,10 +178,10 @@ export default function PortfolioView() {
           <thead>
             <tr className="border-b border-line text-left text-xs text-muted">
               <th className="px-3 py-2 font-medium">Asset</th>
-              <th className="px-3 py-2 font-medium">{pct ? "Weight" : "Value"}</th>
-              <th className="px-3 py-2 font-medium">{pct ? "Gain %" : "Gain €"}</th>
-              <th className="px-3 py-2 font-medium" title="Annualized return since your first buy (price-based, in EUR)">Ann. since 1st buy</th>
-              <th className="px-3 py-2 font-medium" title="Annualized return since your most recent buy (price-based, in EUR)">Ann. since last buy</th>
+              <th className="px-3 py-2 text-center font-medium">{pct ? "Weight" : "Value"}</th>
+              <th className="px-3 py-2 text-center font-medium">{pct ? "Gain %" : "Gain €"}</th>
+              <th className="px-3 py-2 text-center font-medium" title="Annualized return since your first buy (price-based, in EUR)">Ann. since 1st buy</th>
+              <th className="px-3 py-2 text-center font-medium" title="Annualized return since your most recent buy (price-based, in EUR)">Ann. since last buy</th>
             </tr>
           </thead>
           <tbody>
@@ -199,8 +199,8 @@ export default function PortfolioView() {
           <thead>
             <tr className="border-b border-line text-left text-xs text-muted">
               <th className="px-2.5 py-2 align-top font-medium">Asset</th>
-              <th className="px-2 py-2 align-top font-medium" title="Small figure underneath: unrealized gain">{pct ? "Weight" : "Value"}</th>
-              <th className="px-2.5 py-2 align-top font-medium" title="Annualized return since your first buy (top) and since your most recent buy (below)">Ann. 1st/last</th>
+              <th className="px-2 py-2 align-top text-center font-medium" title="Small figure underneath: unrealized gain">{pct ? "Weight" : "Value"}</th>
+              <th className="px-2.5 py-2 align-top text-center font-medium" title="Annualized return since your first buy (top) and since your most recent buy (below)">Ann. 1st/last</th>
             </tr>
           </thead>
           <tbody>
