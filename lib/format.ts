@@ -47,10 +47,10 @@ export function fmtSignedEUR(v: number | null | undefined): string {
   return (v > 0 ? "+" : "") + euroAfter(eurFmt, v);
 }
 
-/** v is a ratio: 0.12 -> "+12.0%" */
+/** v is a ratio: 0.12 -> "+12%", 0.125 -> "+12.5%" — never a trailing ".0". */
 export function fmtPct(v: number | null | undefined, signed = true, digits = 1): string {
   if (v == null || !isFinite(v)) return "—";
-  const s = (v * 100).toFixed(digits) + "%";
+  const s = String(Number((v * 100).toFixed(digits))) + "%";
   return signed && v > 0 ? "+" + s : s;
 }
 
