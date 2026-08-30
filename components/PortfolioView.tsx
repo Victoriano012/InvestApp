@@ -197,9 +197,12 @@ export default function PortfolioView() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-line text-left text-xs text-muted">
-              <th className="px-2.5 py-2 font-medium">Asset</th>
-              <th className="px-2 py-2 text-right font-medium" title="Small figure underneath: unrealized gain">{pct ? "Weight" : "Value"}</th>
-              <th className="px-2.5 py-2 text-right font-medium" title="Annualized return since your first buy (top) and since your most recent buy (below)">Ann.</th>
+              <th className="px-2.5 py-2 align-top font-medium">Asset</th>
+              <th className="px-2 py-2 align-top font-medium" title="Small figure underneath: unrealized gain">{pct ? "Weight" : "Value"}</th>
+              <th className="px-2.5 py-2 align-top font-medium" title="Annualized return since your first buy (top) and since your most recent buy (below)">
+                <div>Ann. 1st</div>
+                <div>Ann. last</div>
+              </th>
             </tr>
           </thead>
           <tbody>
