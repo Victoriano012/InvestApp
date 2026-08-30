@@ -155,7 +155,7 @@ function TransactionRow({
         ) : (
           <>
             <button onClick={onEdit} className="-m-1 p-1 text-accent" title="Edit" aria-label="Edit">✎</button>
-            <button onClick={onRemove} className="-m-1 p-1 text-muted hover:text-down" title="Delete" aria-label="Delete">🗑︎</button>
+            <button onClick={onRemove} className="-m-1 p-1 text-muted hover:text-down" title="Delete" aria-label="Delete">✕</button>
           </>
         )}
       </div>
