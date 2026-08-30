@@ -211,9 +211,16 @@ export default function ChartExplorer() {
         ) : (
           <div
             ref={zoom.containerRef}
-            className="h-[340px] w-full select-none md:h-[440px]"
+            // touch-pan-y: vertical swipes scroll the page; horizontal drags
+            // reach the touch handlers (zoom). No effect on mouse input.
+            // max-sm:overflow-x-clip: recharts renders the tooltip at the raw
+            // cursor position for a frame before flipping it inside the plot;
+            // near the right edge that transient overflow makes mobile Chrome
+            // ratchet the layout viewport wider (page zooms out permanently).
+            className="h-[340px] w-full touch-pan-y select-none max-sm:overflow-x-clip md:h-[440px]"
             title="Drag to zoom — double-click to reset to the range picked above"
             onMouseLeave={() => setHoverKey(null)}
+            {...zoom.touchHandlers}
           >
             <ResponsiveContainer>
               <LineChart
@@ -536,7 +543,11 @@ function ChartTip({
   }
   return (
     <div
-      className="rounded-md border px-2.5 py-2 text-xs shadow-sm"
+      // Phone width cap: the plot is narrower than a full tooltip there, so
+      // recharts pins it to the plot's left edge and the right side would
+      // stick out past the (clipped) chart container. 120px ≈ page padding +
+      // y-axis gutter. Long names then truncate (inert when uncapped).
+      className="rounded-md border px-2.5 py-2 text-xs shadow-sm max-sm:max-w-[calc(100vw-120px)]"
       style={{ background: chromeC.surface, borderColor: chromeC.grid, color: chromeC.ink }}
     >
       <div className="mb-1 font-medium">{label ? fmtDate(label) : ""}</div>
@@ -545,11 +556,11 @@ function ChartTip({
         return (
           <div key={i} className={`flex items-center justify-between gap-4 ${hot ? "font-semibold" : ""}`}>
             <span
-              className="flex items-center gap-1.5"
+              className="flex min-w-0 items-center gap-1.5"
               style={{ color: hot ? chromeC.ink : chromeC.inkSecondary }}
             >
-              <span className="inline-block h-2 w-2 rounded-full" style={{ background: p.color }} />
-              {p.name}
+              <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: p.color }} />
+              <span className="truncate">{p.name}</span>
             </span>
             <span className="tnum">{fmtY(p.value!)}</span>
           </div>
@@ -560,9 +571,9 @@ function ChartTip({
           <div className="mb-0.5" style={{ color: chromeC.muted }}>{fmtDate(nearDate)}</div>
           {txns.get(nearDate)!.map((t) => (
             <div key={t.id} className="flex items-center justify-between gap-4">
-              <span className="flex items-center gap-1.5" style={{ color: chromeC.inkSecondary }}>
+              <span className="flex min-w-0 items-center gap-1.5" style={{ color: chromeC.inkSecondary }}>
                 <span className="font-semibold uppercase" style={{ color: chromeC.ink }}>{t.type}</span>
-                {t.name}
+                <span className="truncate">{t.name}</span>
               </span>
               <span className="tnum">{t.amount}</span>
             </div>

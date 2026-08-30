@@ -87,7 +87,7 @@ function SymbolSearch({
             <button
               key={r.symbol}
               onClick={() => onPick(r)}
-              className="flex w-full items-center justify-between gap-2 border-b border-line/60 px-2.5 py-1.5 text-left text-xs last:border-0 hover:bg-line/30"
+              className="flex w-full flex-wrap items-center justify-between gap-x-2 gap-y-0.5 border-b border-line/60 px-2.5 py-1.5 text-left text-xs last:border-0 hover:bg-line/30 sm:flex-nowrap sm:gap-2"
             >
               <span>
                 <span className="font-semibold">{r.symbol}</span> <span className="text-ink2">{r.name}</span>
@@ -154,8 +154,8 @@ function TransactionRow({
           <span className="rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-white">Editing</span>
         ) : (
           <>
-            <button onClick={onEdit} className="text-accent" title="Edit" aria-label="Edit">✎</button>
-            <button onClick={onRemove} className="text-muted hover:text-down" title="Delete" aria-label="Delete">🗑︎</button>
+            <button onClick={onEdit} className="-m-1 p-1 text-accent" title="Edit" aria-label="Edit">✎</button>
+            <button onClick={onRemove} className="-m-1 p-1 text-muted hover:text-down" title="Delete" aria-label="Delete">🗑︎</button>
           </>
         )}
       </div>
@@ -799,7 +799,8 @@ function AssetManager({ assets, onChanged, dark }: { assets: Asset[]; onChanged:
         <div className="flex flex-wrap gap-1.5">
           {sortedAssets.map((a) =>
             editingId === a.id ? (
-              <span key={a.id} className="flex items-center gap-1.5 rounded-md border border-line px-2 py-1 text-xs">
+              // flex-wrap only matters on phones, where name + short-name + buttons exceed the row.
+              <span key={a.id} className="flex max-w-full flex-wrap items-center gap-1.5 rounded-md border border-line px-2 py-1 text-xs">
                 <span className="h-2 w-2 rounded-full" style={{ background: categoryColor(a.category, dark) }} />
                 <input
                   type="text"

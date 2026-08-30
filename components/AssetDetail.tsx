@@ -55,7 +55,7 @@ export default function AssetDetail({ id }: { id: number }) {
           value={isBasket ? fmtEUR(h.costEUR) : fmtNum(h.quantity)}
           sub={pct ? fmtPct(h.weightPct, false) + " of portfolio" : fmtEUR(h.valueEUR)}
         />
-        <Tile label="Unrealized" value={pct ? fmtPct(h.unrealizedPct) : fmtSignedEUR(h.unrealizedEUR)} tone={h.unrealizedEUR} />
+        <Tile label="Unrealized" value={pct ? fmtPct(h.unrealizedPct) : fmtSignedEUR(h.unrealizedEUR)} tone={h.unrealizedEUR} className="col-span-2 md:col-span-1" />
       </div>
 
       {isBasket && <BasketComponents id={id} />}
@@ -108,7 +108,7 @@ export default function AssetDetail({ id }: { id: number }) {
                       </td>
                       <td className="tnum px-3 py-2 text-right text-xs text-muted">{lot.stats.days}d</td>
                       <td className="px-3 py-2 text-right">
-                        <Link href={`/transactions?edit=${lot.txnId}`} className="text-accent" title="Edit" aria-label="Edit">✎</Link>
+                        <Link href={`/transactions?edit=${lot.txnId}`} className="text-accent max-md:-m-2 max-md:inline-block max-md:p-2" title="Edit" aria-label="Edit">✎</Link>
                       </td>
                     </tr>
                   );
@@ -131,7 +131,7 @@ export default function AssetDetail({ id }: { id: number }) {
                 <span>{fmtDate(s.date)}</span>
                 <span className="flex items-center gap-3">
                   <span className="tnum">{isBasket ? fmtEUR(s.quantity * s.price) : <>{fmtNum(s.quantity)} × {fmtMoney(s.price, h.asset.currency)}</>}</span>
-                  <Link href={`/transactions?edit=${s.id}`} className="text-accent" title="Edit" aria-label="Edit">✎</Link>
+                  <Link href={`/transactions?edit=${s.id}`} className="text-accent max-md:-m-2 max-md:inline-block max-md:p-2" title="Edit" aria-label="Edit">✎</Link>
                 </span>
               </div>
             ))}
@@ -168,10 +168,10 @@ function BasketComponents({ id }: { id: number }) {
   );
 }
 
-function Tile({ label, value, tone, sub }: { label: string; value: string; tone?: number; sub?: string }) {
+function Tile({ label, value, tone, sub, className = "" }: { label: string; value: string; tone?: number; sub?: string; className?: string }) {
   const cls = tone == null ? "" : tone > 0 ? "text-up" : tone < 0 ? "text-down" : "";
   return (
-    <div className="rounded-lg border border-line bg-surface px-3 py-2.5">
+    <div className={`rounded-lg border border-line bg-surface px-3 py-2.5 ${className}`}>
       <div className="text-[11px] uppercase tracking-wide text-muted">{label}</div>
       <div className={`tnum mt-0.5 text-lg font-semibold ${cls}`}>{value}</div>
       {sub && <div className="tnum text-[11px] text-muted">{sub}</div>}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fmtDate, RANGE_OPTIONS, rangeStart, todayISO, type RangeKey } from "@/lib/format";
 
 /** A chart x-range: a preset, or explicit custom dates ("" = open end). */
@@ -59,12 +59,20 @@ export function useDragZoom(handlers: {
   };
   const lastDown = useRef(0);
   const isDouble = useRef(false);
-  const start = (label?: unknown) => {
+  // Timestamp of the last touch on the plot: browsers synthesize mouse events
+  // (mousedown/up/click) right after a tap, and the touch handlers below have
+  // already run the press logic for it — ignore that mouse echo.
+  const lastTouch = useRef(0);
+  const startImpl = (label?: unknown) => {
     if (typeof label !== "string") return;
     const now = Date.now();
     isDouble.current = now - lastDown.current < 400;
     lastDown.current = now;
     setDrag({ from: label, to: label });
+  };
+  const start = (label?: unknown) => {
+    if (Date.now() - lastTouch.current < 800) return;
+    startImpl(label);
   };
   const move = (label?: unknown) => {
     const d = dragRef.current;
@@ -91,32 +99,72 @@ export function useDragZoom(handlers: {
 
   // Registered by the chart so an in-flight drag can track the mouse outside
   // the plot: wrapper element + the dates of the rows currently plotted.
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  const containerEl = useRef<HTMLDivElement | null>(null);
+  // After a tap, browsers replay it as mouse events; the trailing
+  // mouseout/mouseover pair (ghost pointer "leaving" the plot) would reach
+  // React's enter/leave plugin as a mouseleave on the chart wrapper and hide
+  // the tooltip the tap just placed. The mouseover half targets an ANCESTOR
+  // of the chart (relatedTarget is the plot element it left), so a listener
+  // on the container never sees it — filter at document capture instead,
+  // and only when the event actually involves this chart. Trusted-only:
+  // our own synthetic events pass, and pure mouse use (lastTouch stays 0)
+  // is never touched.
+  const ghostFilter = useCallback((e: MouseEvent) => {
+    if (!e.isTrusted || Date.now() - lastTouch.current >= 800) return;
+    const el = containerEl.current;
+    if (!el) return;
+    const t = e.target;
+    const r = e.relatedTarget;
+    if ((t instanceof Node && el.contains(t)) || (r instanceof Node && el.contains(r))) e.stopPropagation();
+  }, []);
+  const containerRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (containerEl.current && !node) {
+        document.removeEventListener("mouseout", ghostFilter, true);
+        document.removeEventListener("mouseover", ghostFilter, true);
+      } else if (node && !containerEl.current) {
+        document.addEventListener("mouseout", ghostFilter, true);
+        document.addEventListener("mouseover", ghostFilter, true);
+      }
+      containerEl.current = node;
+    },
+    [ghostFilter]
+  );
   const datesRef = useRef<string[]>([]);
   const setDates = (dates: string[]) => {
     datesRef.current = dates;
+  };
+
+  // Map a clientX onto the plotted date span (recharts lays the rows out
+  // evenly across the plot — category point scale), clamped to the ends.
+  // The grid's bbox is the plot area (axes and margins excluded).
+  const dateAtX = (clientX: number): string | null => {
+    const el = containerEl.current;
+    const dates = datesRef.current;
+    if (!el || dates.length === 0) return null;
+    const plot = el.querySelector(".recharts-cartesian-grid") ?? el.querySelector("svg");
+    const rect = plot?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return null;
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    return dates[Math.round(frac * (dates.length - 1))];
   };
 
   const dragging = drag !== null;
   useEffect(() => {
     if (!dragging) return;
     const onMouseUp = () => endRef.current();
-    // Outside the plot area the selection keeps following the pointer:
-    // map clientX onto the plot's date span (recharts lays the rows out
-    // evenly across it — category point scale), clamped to the ends.
+    // Outside the plot area the selection keeps following the pointer.
     const onMouseMove = (e: MouseEvent) => {
-      const el = containerRef.current;
-      const dates = datesRef.current;
-      if (!el || dates.length === 0) return;
-      // The grid's bbox is the plot area (axes and margins excluded).
+      const el = containerEl.current;
+      if (!el) return;
       const plot = el.querySelector(".recharts-cartesian-grid") ?? el.querySelector("svg");
       const rect = plot?.getBoundingClientRect();
       if (!rect || rect.width <= 0) return;
       // Inside the plot recharts' own onMouseMove reports activeLabel more
       // precisely — only take over when the pointer is outside it.
       if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) return;
-      const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-      move(dates[Math.round(frac * (dates.length - 1))]);
+      const d = dateAtX(e.clientX);
+      if (d) move(d);
     };
     window.addEventListener("mouseup", onMouseUp);
     window.addEventListener("mousemove", onMouseMove);
@@ -124,10 +172,96 @@ export function useDragZoom(handlers: {
       window.removeEventListener("mouseup", onMouseUp);
       window.removeEventListener("mousemove", onMouseMove);
     };
-    // `move` only touches refs and the stable state setter — safe to close over.
+    // `move`/`dateAtX` only touch refs and the stable state setter — safe to close over.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragging]);
-  return { drag, start, move, end, containerRef, setDates };
+
+  // --- Touch (phones): pair with `touch-pan-y` on the chart container. ---
+  // A horizontal one-finger drag selects a zoom span; a vertical swipe is
+  // left to the browser (page scroll); a tap runs the same press logic as a
+  // mouse click, so single-tap → onClick and double-tap → onReset. Intent is
+  // decided once, at the first move past a small slop.
+  // Recharts' tooltip machinery only engages from real mouse moves (its own
+  // touch path only handles per-item hover), so touch drives it by replaying
+  // the finger as untrusted mousemove events on the recharts wrapper — the
+  // tooltip, crosshair, active dots and coordinate-based bolding all behave
+  // exactly as they do for the desktop pointer.
+  const fireMouse = (type: string, x: number, y: number) => {
+    containerEl.current
+      ?.querySelector(".recharts-wrapper")
+      ?.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y }));
+  };
+  const touchSt = useRef<{ x: number; y: number; date: string; mode: "pending" | "zoom" | "scroll" } | null>(null);
+  const onTouchStart = (e: React.TouchEvent) => {
+    lastTouch.current = Date.now();
+    if (e.touches.length !== 1) {
+      // A second finger (pinch, etc.) cancels any selection in flight.
+      touchSt.current = null;
+      if (dragRef.current) setDrag(null);
+      return;
+    }
+    const t = e.touches[0];
+    const date = dateAtX(t.clientX);
+    if (!date) return;
+    touchSt.current = { x: t.clientX, y: t.clientY, date, mode: "pending" };
+    fireMouse("mousemove", t.clientX, t.clientY); // tooltip appears under the finger
+  };
+  const onTouchMove = (e: React.TouchEvent) => {
+    lastTouch.current = Date.now();
+    const st = touchSt.current;
+    if (!st || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    if (st.mode === "pending") {
+      const dx = Math.abs(t.clientX - st.x);
+      const dy = Math.abs(t.clientY - st.y);
+      if (dx < 8 && dy < 8) return;
+      if (dx > dy) st.mode = "zoom";
+      else {
+        st.mode = "scroll"; // the browser owns the gesture (pan-y)
+        return;
+      }
+      startImpl(st.date);
+    }
+    if (st.mode === "zoom") {
+      const d = dateAtX(t.clientX);
+      if (d) move(d);
+      fireMouse("mousemove", t.clientX, t.clientY); // tooltip follows the finger
+    }
+  };
+  const onTouchEnd = () => {
+    lastTouch.current = Date.now();
+    const st = touchSt.current;
+    touchSt.current = null;
+    if (!st) return;
+    if (st.mode === "zoom") {
+      end();
+      // The window just changed — a tooltip pinned to the old rows would show
+      // stale data, so put it away (untrusted, passes the ghost filter below).
+      fireMouse("mouseout", st.x, st.y);
+    } else if (st.mode === "pending") {
+      // A stationary tap: run it through the press logic so clicks and
+      // double-tap reset behave exactly like their mouse counterparts. The
+      // touchstart's mousemove already placed the tooltip here; it stays
+      // until the next interaction.
+      startImpl(st.date);
+      end();
+    }
+  };
+  const onTouchCancel = () => {
+    lastTouch.current = Date.now();
+    touchSt.current = null;
+    if (dragRef.current) setDrag(null);
+  };
+
+  return {
+    drag,
+    start,
+    move,
+    end,
+    containerRef,
+    setDates,
+    touchHandlers: { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel },
+  };
 }
 
 function shiftMonth(ym: string, delta: number): string {
@@ -445,8 +579,10 @@ function DateField({
         {value ? fmtDate(value) : "…"}
       </button>
       {open && (
+        // Phones: the anchored popover would run off the 390px viewport, so
+        // ≤ sm it becomes a fixed, horizontally centered overlay instead.
         <span
-          className={`absolute top-full z-30 mt-1 block rounded-lg border border-line bg-surface p-2 shadow-lg ${
+          className={`absolute top-full z-30 mt-1 block rounded-lg border border-line bg-surface p-2 shadow-lg max-sm:fixed max-sm:inset-x-0 max-sm:top-28 max-sm:mx-auto max-sm:mt-0 max-sm:w-fit ${
             align === "right" ? "right-0" : "left-0"
           }`}
         >
@@ -520,25 +656,28 @@ export default function RangeControl({
           </button>
         ))}
       </span>
-      <DateField
-        value={showFrom}
-        min={min}
-        max={showTo || max}
-        txnMap={txnMap}
-        onPick={(d) => custom(d, showTo)}
-        title="Start date — transaction dates are dotted on the calendar"
-        align="left"
-      />
-      <span className="text-muted">→</span>
-      <DateField
-        value={showTo}
-        min={showFrom || min}
-        max={max}
-        txnMap={txnMap}
-        onPick={(d) => custom(showFrom, d)}
-        title="End date — transaction dates are dotted on the calendar"
-        align="right"
-      />
+      {/* One flex item, so on a narrow screen the pair wraps as a unit. */}
+      <span className="flex items-center gap-1.5">
+        <DateField
+          value={showFrom}
+          min={min}
+          max={showTo || max}
+          txnMap={txnMap}
+          onPick={(d) => custom(d, showTo)}
+          title="Start date — transaction dates are dotted on the calendar"
+          align="left"
+        />
+        <span className="text-muted">→</span>
+        <DateField
+          value={showTo}
+          min={showFrom || min}
+          max={max}
+          txnMap={txnMap}
+          onPick={(d) => custom(showFrom, d)}
+          title="End date — transaction dates are dotted on the calendar"
+          align="right"
+        />
+      </span>
     </span>
   );
 }
