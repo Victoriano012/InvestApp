@@ -17,7 +17,7 @@ import {
 } from "recharts";
 import { useDark, useJson } from "./hooks";
 import RangeControl, { rangeWindow, useDragZoom, type RangeSel } from "./RangeControl";
-import { axisDateFmt, daysBetween, fmtDate, fmtEUR, fmtMoney, fmtPct, todayISO } from "@/lib/format";
+import { axisDateFmt, daysBetween, fmtCompact, fmtDate, fmtEUR, fmtMoney, fmtPct, todayISO } from "@/lib/format";
 import { categoryColor, chrome, dashFor } from "@/lib/palette";
 import { CATEGORIES, type Category, type ExplorerData } from "@/lib/types";
 
@@ -248,7 +248,7 @@ export default function ChartExplorer() {
                   tickLine={false}
                   axisLine={false}
                   width={58}
-                  tickFormatter={(v: number) => fmtY(v)}
+                  tickFormatter={(v: number) => (isPct ? fmtPct(v, false, Math.abs(v) < 0.001 ? 2 : 1) : fmtCompact(v))}
                 />
                 {isPct && <ReferenceLine y={0} stroke={C.axis} strokeWidth={1} />}
                 <Tooltip

@@ -30,6 +30,17 @@ export function fmtEUR(v: number | null | undefined, compact = false): string {
   return euroAfter(compact && Math.abs(v) >= 1000 ? eurFmt0 : eurFmt, v);
 }
 
+/** Compact axis tick: 0, 950, 10k, 14.5k, 1.2M — no symbol, no trailing zeros. */
+export function fmtCompact(v: number | null | undefined): string {
+  if (v == null || !isFinite(v)) return "";
+  const one = (x: number, d: number) => String(Number(x.toFixed(d)));
+  const abs = Math.abs(v);
+  if (abs >= 1e9) return one(v / 1e9, 1) + "B";
+  if (abs >= 1e6) return one(v / 1e6, 1) + "M";
+  if (abs >= 1000) return one(v / 1000, 1) + "k";
+  return one(v, abs < 10 ? 2 : 0);
+}
+
 export function fmtSignedEUR(v: number | null | undefined): string {
   if (v == null || !isFinite(v)) return "—";
   return (v > 0 ? "+" : "") + euroAfter(eurFmt, v);

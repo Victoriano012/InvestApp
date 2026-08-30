@@ -18,7 +18,7 @@ import {
 import { useDark, useJson, useValueMode } from "./hooks";
 import ModeToggle from "./ModeToggle";
 import RangeControl, { rangeWindow, useDragZoom, type RangeSel } from "./RangeControl";
-import { axisDateFmt, daysBetween, fmtDate, fmtEUR, fmtMoney, fmtNum, fmtPct, todayISO } from "@/lib/format";
+import { axisDateFmt, daysBetween, fmtCompact, fmtDate, fmtEUR, fmtMoney, fmtNum, fmtPct, todayISO } from "@/lib/format";
 import { categoryColor, categoryShade, chrome, mixHex } from "@/lib/palette";
 import { CATEGORIES, type CapitalData, type Category } from "@/lib/types";
 
@@ -295,7 +295,7 @@ export default function CapitalChart() {
                   tickLine={false}
                   axisLine={false}
                   width={54}
-                  tickFormatter={(v: number) => (pct ? fmtPct(v, false, 0) : fmtEUR(v, true))}
+                  tickFormatter={(v: number) => (pct ? fmtPct(v, false, 0) : fmtCompact(v))}
                 />
                 <Tooltip
                   content={<CapTip pct={pct} chromeC={C} series={series} txnDates={catTxnDates} nameFor={nameFor} />}
