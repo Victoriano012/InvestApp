@@ -180,8 +180,8 @@ export default function PortfolioView() {
               <th className="w-[50%] px-3 py-2 font-medium">Asset</th>
               <th className="w-[15%] whitespace-nowrap px-3 py-2 pr-8 font-medium">{pct ? "Weight" : "Value"}</th>
               <th className="w-[15%] whitespace-nowrap px-3 py-2 pr-8 font-medium">{pct ? "Gain %" : "Gain €"}</th>
-              <th className="w-[10%] whitespace-nowrap px-3 py-2 text-center font-medium" title="Annualized return since your first buy (price-based, in EUR)">Ann. 1st buy</th>
-              <th className="w-[10%] whitespace-nowrap px-3 py-2 text-center font-medium" title="Annualized return since your most recent buy (price-based, in EUR)">Ann. last buy</th>
+              <th className="w-[10%] whitespace-nowrap px-3 py-2 font-medium" title="Annualized return since your first buy (price-based, in EUR)">Ann. 1st buy</th>
+              <th className="w-[10%] whitespace-nowrap px-3 py-2 font-medium" title="Annualized return since your most recent buy (price-based, in EUR)">Ann. last buy</th>
             </tr>
           </thead>
           <tbody>
@@ -279,12 +279,18 @@ function Row({ h, pct, dark }: { h: Holding; pct: boolean; dark: boolean }) {
           <AssetLabel h={h} dark={dark} />
         </Link>
       </td>
-      <td className="tnum whitespace-nowrap px-3 py-2.5 pr-8 text-right">{pct ? fmtPct(h.weightPct, false) : fmtEUR(h.valueEUR)}</td>
-      <td className="tnum whitespace-nowrap px-3 py-2.5 pr-8 text-right">
-        <Delta v={pct ? h.unrealizedPct : h.unrealizedEUR} money={!pct} />
+      <td className="tnum whitespace-nowrap px-3 py-2.5">
+        <div className="inline-block min-w-[9ch] text-right">{pct ? fmtPct(h.weightPct, false) : fmtEUR(h.valueEUR)}</div>
       </td>
-      <td className="tnum whitespace-nowrap px-3 py-2.5 text-right"><Annual s={h.sinceFirstBuy} date={h.firstBuyDate} /></td>
-      <td className="tnum whitespace-nowrap px-3 py-2.5 text-right"><Annual s={h.sinceLastBuy} date={h.lastBuyDate} /></td>
+      <td className="tnum whitespace-nowrap px-3 py-2.5">
+        <div className="inline-block min-w-[9ch] text-right"><Delta v={pct ? h.unrealizedPct : h.unrealizedEUR} money={!pct} /></div>
+      </td>
+      <td className="tnum whitespace-nowrap px-3 py-2.5">
+        <div className="inline-block min-w-[7ch] text-right"><Annual s={h.sinceFirstBuy} date={h.firstBuyDate} /></div>
+      </td>
+      <td className="tnum whitespace-nowrap px-3 py-2.5">
+        <div className="inline-block min-w-[7ch] text-right"><Annual s={h.sinceLastBuy} date={h.lastBuyDate} /></div>
+      </td>
     </tr>
   );
 }
