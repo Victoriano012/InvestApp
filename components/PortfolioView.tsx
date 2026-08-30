@@ -178,8 +178,8 @@ export default function PortfolioView() {
           <thead>
             <tr className="border-b border-line text-left text-xs text-muted">
               <th className="px-3 py-2 font-medium">Asset</th>
-              <th className="px-3 py-2 text-center font-medium">{pct ? "Weight" : "Value"}</th>
-              <th className="px-3 py-2 text-center font-medium">{pct ? "Gain %" : "Gain €"}</th>
+              <th className="px-3 py-2 font-medium">{pct ? "Weight" : "Value"}</th>
+              <th className="px-3 py-2 font-medium">{pct ? "Gain %" : "Gain €"}</th>
               <th className="w-[1%] whitespace-nowrap px-3 py-2 text-center font-medium" title="Annualized return since your first buy (price-based, in EUR)">Ann. 1st buy</th>
               <th className="w-[1%] whitespace-nowrap px-3 py-2 text-center font-medium" title="Annualized return since your most recent buy (price-based, in EUR)">Ann. last buy</th>
             </tr>
@@ -279,8 +279,8 @@ function Row({ h, pct, dark }: { h: Holding; pct: boolean; dark: boolean }) {
           <AssetLabel h={h} dark={dark} />
         </Link>
       </td>
-      <td className="tnum px-3 py-2.5 text-right">{pct ? fmtPct(h.weightPct, false) : fmtEUR(h.valueEUR)}</td>
-      <td className="tnum px-3 py-2.5 text-right">
+      <td className="tnum px-3 py-2.5 pr-8">{pct ? fmtPct(h.weightPct, false) : fmtEUR(h.valueEUR)}</td>
+      <td className="tnum px-3 py-2.5 pr-8">
         <Delta v={pct ? h.unrealizedPct : h.unrealizedEUR} money={!pct} />
       </td>
       <td className="tnum w-[1%] whitespace-nowrap px-3 py-2.5 text-right"><Annual s={h.sinceFirstBuy} date={h.firstBuyDate} /></td>
