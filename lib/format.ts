@@ -35,9 +35,10 @@ export function fmtCompact(v: number | null | undefined): string {
   if (v == null || !isFinite(v)) return "";
   const one = (x: number, d: number) => String(Number(x.toFixed(d)));
   const abs = Math.abs(v);
-  if (abs >= 1e9) return one(v / 1e9, 1) + "B";
-  if (abs >= 1e6) return one(v / 1e6, 1) + "M";
-  if (abs >= 1000) return one(v / 1000, 1) + "k";
+  // Thresholds sit at the rounding boundary so 999.6 shows as 1k, not 1000.
+  if (abs >= 999.95e6) return one(v / 1e9, 1) + "B";
+  if (abs >= 999.95e3) return one(v / 1e6, 1) + "M";
+  if (abs >= 999.5) return one(v / 1e3, 1) + "k";
   return one(v, abs < 10 ? 2 : 0);
 }
 
