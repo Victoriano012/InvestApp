@@ -197,7 +197,7 @@ export default function ChartExplorer() {
       </div>
 
       {/* Chart */}
-      <div className="rounded-lg border border-line bg-surface p-2 md:p-3">
+      <div className="rounded-lg border border-line bg-surface p-2 max-sm:-mx-4 max-sm:rounded-none max-sm:border-x-0 md:p-3">
         {series.length === 0 ? (
           <div className="flex h-[340px] w-full items-center justify-center md:h-[440px]">
             <p className="p-10 text-center text-sm text-muted">

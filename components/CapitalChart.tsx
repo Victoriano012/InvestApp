@@ -243,7 +243,7 @@ export default function CapitalChart() {
         </div>
       </div>
 
-      <div className="rounded-lg border border-line bg-surface p-2 md:p-3">
+      <div className="rounded-lg border border-line bg-surface p-2 max-sm:-mx-4 max-sm:rounded-none max-sm:border-x-0 md:p-3">
         {series.length === 0 ? (
           // Same height as the chart — the block must not resize when nothing is selected.
           <div className="flex h-[320px] w-full items-center justify-center md:h-[420px]">
