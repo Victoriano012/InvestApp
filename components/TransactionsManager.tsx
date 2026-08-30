@@ -161,7 +161,8 @@ function TransactionRow({
           </>
         )}
       </div>
-      {txn.note && <div className="basis-full text-muted sm:hidden">{txn.note}</div>}
+      {/* Indent past the dot + type tag so the note aligns with the asset name. */}
+      {txn.note && <div className="basis-full pl-[78px] text-muted sm:hidden">{txn.note}</div>}
     </div>
   );
 }
