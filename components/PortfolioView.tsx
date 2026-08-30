@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { useDark, useJson, useMobile, useValueMode } from "./hooks";
 import ModeToggle from "./ModeToggle";
@@ -189,12 +190,23 @@ export default function PortfolioView() {
         {heldSorted.length === 0 && <Empty />}
       </div>
 
-      {/* Holdings — cards on mobile */}
-      <div className="space-y-2 md:hidden">
-        {heldSorted.map((h) => (
-          <Card key={h.asset.id} h={h} pct={pct} dark={dark} />
-        ))}
-        {heldSorted.length === 0 && <div className="rounded-lg border border-line bg-surface"><Empty /></div>}
+      {/* Holdings — compact table on mobile */}
+      <div className="rounded-lg border border-line bg-surface md:hidden">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-line text-left text-xs text-muted">
+              <th className="px-2.5 py-2 font-medium">Asset</th>
+              <th className="px-2 py-2 text-right font-medium" title="Small figure underneath: unrealized gain">{pct ? "Weight" : "Value"}</th>
+              <th className="px-2.5 py-2 text-right font-medium" title="Annualized return since your first buy (top) and since your most recent buy (below)">Ann.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {heldSorted.map((h) => (
+              <MobileRow key={h.asset.id} h={h} pct={pct} dark={dark} />
+            ))}
+          </tbody>
+        </table>
+        {heldSorted.length === 0 && <Empty />}
       </div>
 
       {watch.length > 0 && (
@@ -274,32 +286,25 @@ function Row({ h, pct, dark }: { h: Holding; pct: boolean; dark: boolean }) {
   );
 }
 
-function Card({ h, pct, dark }: { h: Holding; pct: boolean; dark: boolean }) {
-  // One stats line per asset: value · ann. 1st · ann. last · gain.
+function MobileRow({ h, pct, dark }: { h: Holding; pct: boolean; dark: boolean }) {
+  const router = useRouter();
   return (
-    <Link href={`/asset/${h.asset.id}`} className="block rounded-lg border border-line bg-surface p-3">
-      <AssetLabel h={h} dark={dark} plain />
-      <div className="mt-1.5 grid grid-cols-4 gap-x-2 text-xs">
-        <div>
-          <div className="text-[10px] text-muted">{pct ? "Weight" : "Value"}</div>
-          <div className="tnum font-semibold">{pct ? fmtPct(h.weightPct, false) : fmtEUR(h.valueEUR)}</div>
+    <tr
+      className="cursor-pointer border-b border-line/60 last:border-0"
+      onClick={() => router.push(`/asset/${h.asset.id}`)}
+    >
+      <td className="px-2.5 py-2"><AssetLabel h={h} dark={dark} plain /></td>
+      <td className="tnum px-2 py-2 text-right">
+        <div className="font-medium">{pct ? fmtPct(h.weightPct, false) : fmtEUR(h.valueEUR)}</div>
+        <div className="text-[11px]">
+          <Delta v={pct ? h.unrealizedPct : h.unrealizedEUR} money={!pct} />
         </div>
-        <div>
-          <div className="text-[10px] text-muted">Ann. 1st</div>
-          <div className="tnum"><Annual s={h.sinceFirstBuy} /></div>
-        </div>
-        <div>
-          <div className="text-[10px] text-muted">Ann. last</div>
-          <div className="tnum"><Annual s={h.sinceLastBuy} /></div>
-        </div>
-        <div className="text-right">
-          <div className="text-[10px] text-muted">Gain</div>
-          <div className="tnum">
-            <Delta v={pct ? h.unrealizedPct : h.unrealizedEUR} money={!pct} />
-          </div>
-        </div>
-      </div>
-    </Link>
+      </td>
+      <td className="tnum px-2.5 py-2 text-right text-xs">
+        <div><Annual s={h.sinceFirstBuy} /></div>
+        <div><Annual s={h.sinceLastBuy} /></div>
+      </td>
+    </tr>
   );
 }
 
