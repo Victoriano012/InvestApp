@@ -149,6 +149,22 @@ export function useDragZoom(handlers: {
     return dates[Math.round(frac * (dates.length - 1))];
   };
 
+  // On touch there is no mouseleave: a tap anywhere outside the chart puts
+  // the tooltip/crosshair away (untrusted mouseout passes the ghost filter).
+  useEffect(() => {
+    const onDocTouchStart = (e: TouchEvent) => {
+      const el = containerEl.current;
+      if (!el || (e.target instanceof Node && el.contains(e.target))) return;
+      const t = e.touches[0];
+      if (!t) return;
+      el.querySelector(".recharts-wrapper")?.dispatchEvent(
+        new MouseEvent("mouseout", { bubbles: true, cancelable: true, view: window, clientX: t.clientX, clientY: t.clientY })
+      );
+    };
+    document.addEventListener("touchstart", onDocTouchStart, { passive: true });
+    return () => document.removeEventListener("touchstart", onDocTouchStart);
+  }, []);
+
   const dragging = drag !== null;
   useEffect(() => {
     if (!dragging) return;
