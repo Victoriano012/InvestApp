@@ -200,10 +200,7 @@ export default function PortfolioView() {
             <tr className="border-b border-line text-left text-xs text-muted">
               <th className="px-2.5 py-2 align-top font-medium">Asset</th>
               <th className="px-2 py-2 align-top font-medium" title="Small figure underneath: unrealized gain">{pct ? "Weight" : "Value"}</th>
-              <th className="px-2.5 py-2 align-top font-medium" title="Annualized return since your first buy (top) and since your most recent buy (below)">
-                <div>Ann. 1st</div>
-                <div>Ann. last</div>
-              </th>
+              <th className="px-2.5 py-2 align-top font-medium" title="Annualized return since your first buy (top) and since your most recent buy (below)">Ann. 1st/last</th>
             </tr>
           </thead>
           <tbody>
