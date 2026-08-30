@@ -25,8 +25,16 @@ export default function Nav() {
   const active = (href: string) =>
     href === "/" ? path === "/" || path.startsWith("/asset") : path.startsWith(href);
 
+  // Mobile header title = the active tab (asset pages belong to Portfolio).
+  const title = ITEMS.find((it) => active(it.href))?.label ?? "InvestApp";
+
   return (
     <>
+      {/* Mobile top bar: just the current tab's title */}
+      <header className="sticky top-0 z-20 border-b border-line bg-surface pt-[env(safe-area-inset-top)] md:hidden">
+        <h1 className="py-2 text-center text-sm font-semibold tracking-tight">{title}</h1>
+      </header>
+
       {/* Desktop top bar */}
       <header className="hidden md:block sticky top-0 z-20 border-b border-line bg-surface/90 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center gap-1 px-4 py-2">
