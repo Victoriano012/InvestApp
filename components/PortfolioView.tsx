@@ -180,8 +180,8 @@ export default function PortfolioView() {
               <th className="px-3 py-2 font-medium">Asset</th>
               <th className="px-3 py-2 text-center font-medium">{pct ? "Weight" : "Value"}</th>
               <th className="px-3 py-2 text-center font-medium">{pct ? "Gain %" : "Gain €"}</th>
-              <th className="w-[1%] whitespace-nowrap px-3 py-2 text-center font-medium" title="Annualized return since your first buy (price-based, in EUR)">Ann. since 1st buy</th>
-              <th className="w-[1%] whitespace-nowrap px-3 py-2 text-center font-medium" title="Annualized return since your most recent buy (price-based, in EUR)">Ann. since last buy</th>
+              <th className="w-[1%] whitespace-nowrap px-3 py-2 text-center font-medium" title="Annualized return since your first buy (price-based, in EUR)">Ann. 1st buy</th>
+              <th className="w-[1%] whitespace-nowrap px-3 py-2 text-center font-medium" title="Annualized return since your most recent buy (price-based, in EUR)">Ann. last buy</th>
             </tr>
           </thead>
           <tbody>
