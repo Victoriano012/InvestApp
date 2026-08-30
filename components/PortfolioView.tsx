@@ -231,21 +231,26 @@ function Tile({ label, value, tone, sub, className = "" }: { label: string; valu
   );
 }
 
-function AssetLabel({ h, dark }: { h: Holding; dark: boolean }) {
+function AssetLabel({ h, dark, plain }: { h: Holding; dark: boolean; plain?: boolean }) {
   const mobile = useMobile();
+  const lots = h.txnCount > 1 ? `${h.lots.filter((l) => l.remaining > 0).length} lots` : null;
   return (
     <div className="flex items-center gap-2.5">
       <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: categoryColor(h.asset.category, dark) }} />
       <div>
         <div className="font-medium">{assetLabel(h.asset, mobile)}</div>
-        <div className="text-xs text-muted">
-          {h.asset.kind === "basket"
-            ? "Basket"
-            : h.asset.category === "gold" || h.asset.category === "crypto"
-              ? h.asset.symbol
-              : `${h.asset.symbol} · ${CATEGORY_LABEL[h.asset.category]}`}
-          {h.txnCount > 1 && ` · ${h.lots.filter((l) => l.remaining > 0).length} lots`}
-        </div>
+        {plain ? (
+          lots && <div className="text-xs text-muted">{lots}</div>
+        ) : (
+          <div className="text-xs text-muted">
+            {h.asset.kind === "basket"
+              ? "Basket"
+              : h.asset.category === "gold" || h.asset.category === "crypto"
+                ? h.asset.symbol
+                : `${h.asset.symbol} · ${CATEGORY_LABEL[h.asset.category]}`}
+            {lots && ` · ${lots}`}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -273,7 +278,7 @@ function Card({ h, pct, dark }: { h: Holding; pct: boolean; dark: boolean }) {
   return (
     <Link href={`/asset/${h.asset.id}`} className="block rounded-lg border border-line bg-surface p-3">
       <div className="flex items-start justify-between gap-2">
-        <AssetLabel h={h} dark={dark} />
+        <AssetLabel h={h} dark={dark} plain />
         <div className="text-right">
           <div className="tnum font-semibold">{pct ? fmtPct(h.weightPct, false) : fmtEUR(h.valueEUR)}</div>
           <div className="tnum text-sm">
@@ -284,11 +289,11 @@ function Card({ h, pct, dark }: { h: Holding; pct: boolean; dark: boolean }) {
       <div className="mt-2 grid grid-cols-2 gap-1 text-xs">
         <div>
           <div className="text-muted">Ann. 1st buy</div>
-          <div className="tnum"><Annual s={h.sinceFirstBuy} date={h.firstBuyDate} /></div>
+          <div className="tnum"><Annual s={h.sinceFirstBuy} /></div>
         </div>
         <div>
           <div className="text-muted">Ann. last buy</div>
-          <div className="tnum"><Annual s={h.sinceLastBuy} date={h.lastBuyDate} /></div>
+          <div className="tnum"><Annual s={h.sinceLastBuy} /></div>
         </div>
       </div>
     </Link>
