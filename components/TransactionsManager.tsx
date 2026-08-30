@@ -144,7 +144,9 @@ function TransactionRow({
           <div className="font-medium">{asset ? assetLabel(asset, mobile) : "?"}</div>
           <div className="text-muted">
             {fmtDate(txn.date)}
-            {txn.note ? ` · ${txn.note}` : ""}
+            {/* On phones the note gets its own full-width line at the bottom
+                (below) so it can't wrap the price/buttons under the row. */}
+            {txn.note ? <span className="max-sm:hidden"> · {txn.note}</span> : ""}
           </div>
         </div>
       </div>
@@ -159,6 +161,7 @@ function TransactionRow({
           </>
         )}
       </div>
+      {txn.note && <div className="basis-full text-muted sm:hidden">{txn.note}</div>}
     </div>
   );
 }
