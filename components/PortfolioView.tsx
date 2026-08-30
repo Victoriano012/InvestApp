@@ -275,25 +275,28 @@ function Row({ h, pct, dark }: { h: Holding; pct: boolean; dark: boolean }) {
 }
 
 function Card({ h, pct, dark }: { h: Holding; pct: boolean; dark: boolean }) {
+  // One stats line per asset: value · ann. 1st · ann. last · gain.
   return (
     <Link href={`/asset/${h.asset.id}`} className="block rounded-lg border border-line bg-surface p-3">
-      <div className="flex items-start justify-between gap-2">
-        <AssetLabel h={h} dark={dark} plain />
-        <div className="text-right">
-          <div className="tnum font-semibold">{pct ? fmtPct(h.weightPct, false) : fmtEUR(h.valueEUR)}</div>
-          <div className="tnum text-sm">
-            <Delta v={pct ? h.unrealizedPct : h.unrealizedEUR} money={!pct} />
-          </div>
-        </div>
-      </div>
-      <div className="mt-2 grid grid-cols-2 gap-1 text-xs">
+      <AssetLabel h={h} dark={dark} plain />
+      <div className="mt-1.5 grid grid-cols-4 gap-x-2 text-xs">
         <div>
-          <div className="text-muted">Ann. 1st buy</div>
+          <div className="text-[10px] text-muted">{pct ? "Weight" : "Value"}</div>
+          <div className="tnum font-semibold">{pct ? fmtPct(h.weightPct, false) : fmtEUR(h.valueEUR)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] text-muted">Ann. 1st</div>
           <div className="tnum"><Annual s={h.sinceFirstBuy} /></div>
         </div>
         <div>
-          <div className="text-muted">Ann. last buy</div>
+          <div className="text-[10px] text-muted">Ann. last</div>
           <div className="tnum"><Annual s={h.sinceLastBuy} /></div>
+        </div>
+        <div className="text-right">
+          <div className="text-[10px] text-muted">Gain</div>
+          <div className="tnum">
+            <Delta v={pct ? h.unrealizedPct : h.unrealizedEUR} money={!pct} />
+          </div>
         </div>
       </div>
     </Link>
