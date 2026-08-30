@@ -354,7 +354,7 @@ export default function ChartExplorer() {
           })}
         </div>
       ) : (
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs max-sm:gap-x-1.5">
         <span className="flex items-center gap-1.5 text-muted">
           <button className="rounded-md border border-line bg-surface px-2 py-1 hover:text-ink2" onClick={() => setSelected(assets.map((a) => a.id))}>All</button>
           <button className="rounded-md border border-line bg-surface px-2 py-1 hover:text-ink2" onClick={() => setSelected([])}>None</button>
@@ -366,7 +366,7 @@ export default function ChartExplorer() {
             const allOn = ids.every((id) => sel.includes(id));
             const color = categoryColor(cat.key, dark);
             return (
-              <span key={cat.key} className="flex flex-wrap items-center gap-1.5">
+              <span key={cat.key} className="flex flex-wrap items-center gap-1.5 max-sm:contents">
                 {inCat.length > 1 && (
                   <button
                     onClick={() =>
