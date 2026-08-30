@@ -126,7 +126,7 @@ export default function PortfolioView() {
   return (
     <div className="space-y-5">
       {/* Summary tiles + sort controls: one line on desktop, stacked on phones */}
-      <div className="space-y-5 md:flex md:items-center md:justify-between md:gap-4 md:space-y-0">
+      <div className="space-y-5 md:flex md:items-end md:justify-between md:gap-4 md:space-y-0">
       <div className="grid grid-cols-2 gap-2 md:flex-1 md:grid-cols-3 md:gap-3">
         <Tile label="Total value" value={fmtEUR(data.totalValueEUR)} />
         <Tile
