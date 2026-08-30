@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect } from "react";
+import { prefetchJson } from "./hooks";
 
 const ITEMS = [
   { href: "/", label: "Portfolio", icon: "M4 19h16M4 15l4-6 4 3 4-7 4 5" },
@@ -12,6 +14,14 @@ const ITEMS = [
 
 export default function Nav() {
   const path = usePathname();
+  // Warm the other tabs' data shortly after load so switching is instant.
+  useEffect(() => {
+    const t = setTimeout(
+      () => prefetchJson(["/api/portfolio", "/api/series", "/api/capital", "/api/transactions", "/api/assets"]),
+      1500
+    );
+    return () => clearTimeout(t);
+  }, []);
   const active = (href: string) =>
     href === "/" ? path === "/" || path.startsWith("/asset") : path.startsWith(href);
 

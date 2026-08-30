@@ -55,18 +55,41 @@ export function useValueMode(): [ValueMode, () => void] {
   return [mode, toggle];
 }
 
+// Last good response per URL, so returning to a tab renders instantly with
+// the previous data while a fresh copy loads in the background.
+const jsonCache = new Map<string, unknown>();
+
+/** Warm the cache for other tabs (fills only missing entries). */
+export function prefetchJson(urls: string[]): void {
+  for (const url of urls) {
+    if (jsonCache.has(url)) continue;
+    fetch(url)
+      .then(async (r) => {
+        const j = await r.json();
+        if (r.ok && !jsonCache.has(url)) jsonCache.set(url, j);
+      })
+      .catch(() => {
+        /* it'll load on visit */
+      });
+  }
+}
+
 export function useJson<T>(url: string): { data: T | null; error: string | null; reload: () => void } {
-  const [data, setData] = useState<T | null>(null);
+  const [data, setData] = useState<T | null>(() => (jsonCache.get(url) as T | undefined) ?? null);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   useEffect(() => {
     if (!url) return;
     let alive = true;
     setError(null);
+    // Stale-while-revalidate: show the cached copy (or a loading state when
+    // there is none), then always fetch fresh.
+    setData(((jsonCache.get(url) as T | undefined) ?? null) as T | null);
     fetch(url)
       .then(async (r) => {
         const j = await r.json();
         if (!r.ok) throw new Error(j?.error || r.statusText);
+        jsonCache.set(url, j);
         if (alive) setData(j);
       })
       .catch((e) => alive && setError(String(e?.message ?? e)));
