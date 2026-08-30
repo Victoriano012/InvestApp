@@ -208,16 +208,50 @@ export function useDragZoom(handlers: {
       ?.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y }));
   };
   const touchSt = useRef<{ x: number; y: number; date: string; mode: "pending" | "zoom" | "scroll" } | null>(null);
+  // Touchmove fires far faster than a phone can re-render the chart (each
+  // move re-renders every Line twice over: drag state + tooltip state), so
+  // events would queue up and the selection trails the finger. Instead the
+  // gesture caches the plot rect once (getBoundingClientRect per event
+  // forces a layout right after the previous render) and coalesces the
+  // per-move work to one animation frame, always using the LATEST position.
+  const gestureRect = useRef<DOMRect | null>(null);
+  const lastXY = useRef<{ x: number; y: number } | null>(null);
+  const rafId = useRef<number | null>(null);
+  const dateAtXCached = (clientX: number): string | null => {
+    const rect = gestureRect.current;
+    const dates = datesRef.current;
+    if (!rect || rect.width <= 0 || dates.length === 0) return null;
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    return dates[Math.round(frac * (dates.length - 1))];
+  };
+  const applyTouchMove = () => {
+    rafId.current = null;
+    const p = lastXY.current;
+    if (!p || touchSt.current?.mode !== "zoom") return;
+    const d = dateAtXCached(p.x);
+    if (d) move(d);
+    fireMouse("mousemove", p.x, p.y); // tooltip follows the finger
+  };
+  const cancelRaf = () => {
+    if (rafId.current != null) {
+      cancelAnimationFrame(rafId.current);
+      rafId.current = null;
+    }
+  };
   const onTouchStart = (e: React.TouchEvent) => {
     lastTouch.current = Date.now();
     if (e.touches.length !== 1) {
       // A second finger (pinch, etc.) cancels any selection in flight.
       touchSt.current = null;
+      cancelRaf();
       if (dragRef.current) setDrag(null);
       return;
     }
     const t = e.touches[0];
-    const date = dateAtX(t.clientX);
+    const el = containerEl.current;
+    const plot = el?.querySelector(".recharts-cartesian-grid") ?? el?.querySelector("svg");
+    gestureRect.current = plot?.getBoundingClientRect() ?? null;
+    const date = dateAtXCached(t.clientX);
     if (!date) return;
     touchSt.current = { x: t.clientX, y: t.clientY, date, mode: "pending" };
     fireMouse("mousemove", t.clientX, t.clientY); // tooltip appears under the finger
@@ -239,14 +273,18 @@ export function useDragZoom(handlers: {
       startImpl(st.date);
     }
     if (st.mode === "zoom") {
-      const d = dateAtX(t.clientX);
-      if (d) move(d);
-      fireMouse("mousemove", t.clientX, t.clientY); // tooltip follows the finger
+      lastXY.current = { x: t.clientX, y: t.clientY };
+      if (rafId.current == null) rafId.current = requestAnimationFrame(applyTouchMove);
     }
   };
   const onTouchEnd = () => {
     lastTouch.current = Date.now();
     const st = touchSt.current;
+    // Flush the last finger position first, so the final span is exact.
+    if (st?.mode === "zoom" && rafId.current != null) {
+      cancelRaf();
+      applyTouchMove();
+    }
     touchSt.current = null;
     if (!st) return;
     if (st.mode === "zoom") {
@@ -266,6 +304,7 @@ export function useDragZoom(handlers: {
   const onTouchCancel = () => {
     lastTouch.current = Date.now();
     touchSt.current = null;
+    cancelRaf();
     if (dragRef.current) setDrag(null);
   };
 
