@@ -667,7 +667,7 @@ export default function RangeControl({
           <button
             key={r.key}
             onClick={() => onChange({ preset: r.key, from: "", to: "" })}
-            className={`px-2.5 py-1 ${r.key === "3m" || r.key === "ytd" ? "max-sm:hidden " : ""}${sel.preset === r.key ? "bg-accent/15 font-semibold text-accent" : "bg-surface text-muted hover:text-ink2"}`}
+            className={`px-2.5 py-1 ${r.key === "3m" ? "max-sm:hidden " : ""}${sel.preset === r.key ? "bg-accent/15 font-semibold text-accent" : "bg-surface text-muted hover:text-ink2"}`}
           >
             {r.label}
           </button>
