@@ -197,26 +197,27 @@ export function useDragZoom(handlers: {
   // left to the browser (page scroll); a tap runs the same press logic as a
   // mouse click, so single-tap → onClick and double-tap → onReset. Intent is
   // decided once, at the first move past a small slop.
-  // Recharts' tooltip machinery only engages from real mouse moves (its own
-  // touch path only handles per-item hover), so touch drives it by replaying
-  // the finger as untrusted mousemove events on the recharts wrapper — the
-  // tooltip, crosshair, active dots and coordinate-based bolding all behave
-  // exactly as they do for the desktop pointer.
+  // A tap replays the finger as an untrusted mousemove on the recharts
+  // wrapper so the tooltip/crosshair appear under it. A zoom drag must NOT
+  // touch recharts at all: any per-move state (drag ReferenceArea, tooltip)
+  // re-renders every Line — twice over with the hover-hit strokes — and one
+  // such render blows a phone's frame budget, so moves pile up and the UI
+  // freezes. Instead the selection is a fixed-position overlay div whose
+  // style is updated imperatively (one animation frame per move, latest
+  // position wins) and the single onZoom state update happens at touchend.
   const fireMouse = (type: string, x: number, y: number) => {
     containerEl.current
       ?.querySelector(".recharts-wrapper")
       ?.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y }));
   };
   const touchSt = useRef<{ x: number; y: number; date: string; mode: "pending" | "zoom" | "scroll" } | null>(null);
-  // Touchmove fires far faster than a phone can re-render the chart (each
-  // move re-renders every Line twice over: drag state + tooltip state), so
-  // events would queue up and the selection trails the finger. Instead the
-  // gesture caches the plot rect once (getBoundingClientRect per event
-  // forces a layout right after the previous render) and coalesces the
-  // per-move work to one animation frame, always using the LATEST position.
+  // The plot rect is cached once per gesture (getBoundingClientRect per event
+  // forces a layout right after the previous render).
   const gestureRect = useRef<DOMRect | null>(null);
-  const lastXY = useRef<{ x: number; y: number } | null>(null);
+  const lastX = useRef(0);
   const rafId = useRef<number | null>(null);
+  const overlayEl = useRef<HTMLDivElement | null>(null);
+  const zoomFrom = useRef<string | null>(null);
   const dateAtXCached = (clientX: number): string | null => {
     const rect = gestureRect.current;
     const dates = datesRef.current;
@@ -224,13 +225,19 @@ export function useDragZoom(handlers: {
     const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
     return dates[Math.round(frac * (dates.length - 1))];
   };
+  const clampX = (x: number) => {
+    const r = gestureRect.current;
+    return r ? Math.min(Math.max(x, r.left), r.right) : x;
+  };
   const applyTouchMove = () => {
     rafId.current = null;
-    const p = lastXY.current;
-    if (!p || touchSt.current?.mode !== "zoom") return;
-    const d = dateAtXCached(p.x);
-    if (d) move(d);
-    fireMouse("mousemove", p.x, p.y); // tooltip follows the finger
+    const el = overlayEl.current;
+    const st = touchSt.current;
+    if (!el || st?.mode !== "zoom") return;
+    const x0 = clampX(st.x);
+    const x1 = clampX(lastX.current);
+    el.style.left = `${Math.min(x0, x1)}px`;
+    el.style.width = `${Math.abs(x1 - x0)}px`;
   };
   const cancelRaf = () => {
     if (rafId.current != null) {
@@ -238,12 +245,20 @@ export function useDragZoom(handlers: {
       rafId.current = null;
     }
   };
+  const endZoomGesture = () => {
+    cancelRaf();
+    overlayEl.current?.remove();
+    overlayEl.current = null;
+    zoomFrom.current = null;
+  };
+  // The overlay lives on document.body — reap it if we unmount mid-drag.
+  useEffect(() => () => overlayEl.current?.remove(), []);
   const onTouchStart = (e: React.TouchEvent) => {
     lastTouch.current = Date.now();
     if (e.touches.length !== 1) {
       // A second finger (pinch, etc.) cancels any selection in flight.
       touchSt.current = null;
-      cancelRaf();
+      endZoomGesture();
       if (dragRef.current) setDrag(null);
       return;
     }
@@ -265,32 +280,48 @@ export function useDragZoom(handlers: {
       const dx = Math.abs(t.clientX - st.x);
       const dy = Math.abs(t.clientY - st.y);
       if (dx < 8 && dy < 8) return;
-      if (dx > dy) st.mode = "zoom";
-      else {
+      if (dx <= dy) {
         st.mode = "scroll"; // the browser owns the gesture (pan-y)
         return;
       }
-      startImpl(st.date);
+      st.mode = "zoom";
+      zoomFrom.current = st.date;
+      // The finger is about to sweep the plot — put the tap's tooltip away
+      // (one recharts update at gesture start, then the chart stays static).
+      fireMouse("mouseout", st.x, st.y);
+      const rect = gestureRect.current;
+      if (rect) {
+        const el = document.createElement("div");
+        el.style.cssText =
+          `position:fixed;top:${rect.top}px;height:${rect.height}px;left:${clampX(st.x)}px;width:0;` +
+          "background:rgba(128,128,128,0.18);border-left:1px solid rgba(128,128,128,0.6);" +
+          "border-right:1px solid rgba(128,128,128,0.6);pointer-events:none;z-index:30;";
+        document.body.appendChild(el);
+        overlayEl.current = el;
+      }
     }
     if (st.mode === "zoom") {
-      lastXY.current = { x: t.clientX, y: t.clientY };
+      lastX.current = t.clientX;
       if (rafId.current == null) rafId.current = requestAnimationFrame(applyTouchMove);
     }
   };
   const onTouchEnd = () => {
     lastTouch.current = Date.now();
     const st = touchSt.current;
-    // Flush the last finger position first, so the final span is exact.
-    if (st?.mode === "zoom" && rafId.current != null) {
-      cancelRaf();
-      applyTouchMove();
-    }
     touchSt.current = null;
     if (!st) return;
     if (st.mode === "zoom") {
-      end();
-      // The window just changed — a tooltip pinned to the old rows would show
-      // stale data, so put it away (untrusted, passes the ghost filter below).
+      // The span is computed from the raw last finger x — nothing to flush.
+      const from = zoomFrom.current;
+      const to = dateAtXCached(lastX.current);
+      endZoomGesture();
+      if (from && to && from !== to) {
+        lastDown.current = 0;
+        if (from < to) handlers.onZoom(from, to);
+        else handlers.onZoom(to, from);
+      }
+      // Make sure no crosshair/tooltip lingers after the window change
+      // (untrusted, passes the ghost filter below).
       fireMouse("mouseout", st.x, st.y);
     } else if (st.mode === "pending") {
       // A stationary tap: run it through the press logic so clicks and
@@ -304,7 +335,7 @@ export function useDragZoom(handlers: {
   const onTouchCancel = () => {
     lastTouch.current = Date.now();
     touchSt.current = null;
-    cancelRaf();
+    endZoomGesture();
     if (dragRef.current) setDrag(null);
   };
 
