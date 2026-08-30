@@ -247,7 +247,7 @@ export default function ChartExplorer() {
                   tick={{ fill: C.muted, fontSize: 11 }}
                   tickLine={false}
                   axisLine={false}
-                  width={58}
+                  width="auto"
                   tickFormatter={(v: number) => (isPct ? fmtPct(v, false, Math.abs(v) < 0.001 ? 2 : 1) : fmtCompact(v))}
                 />
                 {isPct && <ReferenceLine y={0} stroke={C.axis} strokeWidth={1} />}

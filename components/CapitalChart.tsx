@@ -294,7 +294,7 @@ export default function CapitalChart() {
                   tick={{ fill: C.muted, fontSize: 11 }}
                   tickLine={false}
                   axisLine={false}
-                  width={54}
+                  width="auto"
                   tickFormatter={(v: number) => (pct ? fmtPct(v, false, 0) : fmtCompact(v))}
                 />
                 <Tooltip
