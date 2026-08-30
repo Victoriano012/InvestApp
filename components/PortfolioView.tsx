@@ -29,18 +29,19 @@ function Delta({ v, money }: { v: number | null | undefined; money?: boolean }) 
 
 /** Annualized rate cell; short holding periods are flagged instead of extrapolated. */
 function Annual({ s, date }: { s: ReturnStats | null; date?: string | null }) {
-  const when = date ? (
-    <span className="ml-1 text-[10px] text-muted" title={fmtDate(date)}>
-      {fmtDayShort(date)}
-    </span>
-  ) : null;
   if (!s) return <span className="text-muted">—</span>;
+  // The buy date sits in small muted text under the figure.
+  const when = date ? (
+    <div className="text-[10px] leading-tight text-muted" title={fmtDate(date)}>
+      {fmtDayShort(date)}
+    </div>
+  ) : null;
   if (s.days < 30)
     return (
-      <span className="text-muted" title={`Ann. return: ${fmtPct(s.annualPct)}`}>
-        {fmtPct(s.totalPct)}
+      <>
+        <span className="text-muted" title={`Ann. return: ${fmtPct(s.annualPct)}`}>{fmtPct(s.totalPct)}</span>
         {when}
-      </span>
+      </>
     );
   return (
     <>
