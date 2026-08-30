@@ -25,8 +25,8 @@ type Metric = "value" | "gain_abs" | "gain_pct";
 type Grouping = "category" | "asset";
 
 const METRICS: { key: Metric; label: string; pct: boolean; title: string }[] = [
-  { key: "gain_abs", label: "Gain €", pct: false, title: "Profit/loss in € vs what you paid (incl. realized)" },
   { key: "gain_pct", label: "Gain %", pct: true, title: "Profit in % of all cash paid into buys (including fees and realized gains)" },
+  { key: "gain_abs", label: "Gain €", pct: false, title: "Profit/loss in € vs what you paid (incl. realized)" },
   { key: "value", label: "Value €", pct: false, title: "Value of your holding (quantity × price)" },
 ];
 
