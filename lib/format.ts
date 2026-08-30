@@ -85,6 +85,13 @@ export function fmtDate(d: string | null | undefined): string {
   });
 }
 
+/** Numeric date for tight mobile layouts: 12/03/25. */
+export function fmtDateNum(d: string | null | undefined): string {
+  if (!d) return "—";
+  const [y, m, day] = d.split("-");
+  return `${day}/${m}/${y.slice(2)}`;
+}
+
 export function fmtDateShort(d: string): string {
   const dt = new Date(d + "T00:00:00Z");
   return dt.toLocaleDateString("en-IE", { month: "short", year: "2-digit", timeZone: "UTC" });

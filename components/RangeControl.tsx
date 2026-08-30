@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fmtDate, RANGE_OPTIONS, rangeStart, todayISO, type RangeKey } from "@/lib/format";
+import { fmtDate, fmtDateNum, RANGE_OPTIONS, rangeStart, todayISO, type RangeKey } from "@/lib/format";
 
 /** A chart x-range: a preset, or explicit custom dates ("" = open end). */
 export interface RangeSel {
@@ -592,7 +592,8 @@ function DateField({
         title={title}
         className="rounded-md border border-line bg-surface px-2.5 py-1 tabular-nums text-ink2 hover:border-accent/50"
       >
-        {value ? fmtDate(value) : "…"}
+        <span className="max-sm:hidden">{value ? fmtDate(value) : "…"}</span>
+        <span className="sm:hidden">{value ? fmtDateNum(value) : "…"}</span>
       </button>
       {open && (
         // Phones: the anchored popover would run off the 390px viewport, so
