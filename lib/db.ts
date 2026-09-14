@@ -70,13 +70,17 @@ async function connect(): Promise<Query> {
     const { neon } = await import("@neondatabase/serverless");
     const sql = neon(url);
     q = (text, params = []) => sql.query(text, params) as Promise<Row[]>;
+    // One HTTP round trip for the whole schema instead of one per statement.
+    await sql.transaction(SCHEMA.map((stmt) => sql.query(stmt)));
   } else {
-    const { PGlite } = await import("@electric-sql/pglite");
+    // turbopackIgnore: never reached in prod (DATABASE_URL set), so keep PGlite's
+    // ~25MB wasm out of every Vercel function trace (incl. the proxy's).
+    const { PGlite } = await import(/* turbopackIgnore: true */ "@electric-sql/pglite");
     const dir = process.env.INVESTAPP_PG_DIR || path.join(process.cwd(), "data", "pg");
     const pg = new PGlite(dir);
     q = async (text, params = []) => (await pg.query(text, params)).rows as Row[];
+    await pg.exec(SCHEMA.join(";\n"));
   }
-  for (const stmt of SCHEMA) await q(stmt);
   return q;
 }
 

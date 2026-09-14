@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect } from "react";
-import { prefetchJson } from "./hooks";
+import { afterFirstLoad, prefetchJson } from "./hooks";
 
 const ITEMS = [
   { href: "/", label: "Portfolio", icon: "M4 19h16M4 15l4-6 4 3 4-7 4 5" },
@@ -14,13 +14,17 @@ const ITEMS = [
 
 export default function Nav() {
   const path = usePathname();
-  // Warm the other tabs' data shortly after load so switching is instant.
+  // Warm the other tabs' data once the current tab's own data is in, so
+  // switching is instant without competing with the first paint.
   useEffect(() => {
-    const t = setTimeout(
-      () => prefetchJson(["/api/portfolio", "/api/series", "/api/capital", "/api/transactions", "/api/assets"]),
-      1500
+    let alive = true;
+    afterFirstLoad.then(
+      () =>
+        alive && prefetchJson(["/api/portfolio", "/api/series", "/api/capital", "/api/transactions", "/api/assets"])
     );
-    return () => clearTimeout(t);
+    return () => {
+      alive = false;
+    };
   }, []);
   const active = (href: string) =>
     href === "/" ? path === "/" || path.startsWith("/asset") : path.startsWith(href);

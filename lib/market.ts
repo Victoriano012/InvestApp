@@ -21,21 +21,26 @@ export const GBP_FX_SYMBOL = "EURGBP=X"; // GBP per 1 EUR (money-based entry onl
 /**
  * Latest quotes for a set of symbols, cached in Postgres with a 5-minute TTL.
  * On fetch failure the stale cached quote is returned and the symbol is
- * reported in `stale`.
+ * reported in `stale`. With `cacheOnly`, any cached quote (even past TTL) is
+ * used without fetching; `skipped` is true if one past TTL was used that way.
  */
 export async function getQuotes(
-  symbols: string[]
-): Promise<{ quotes: Map<string, CachedQuote>; stale: string[] }> {
+  symbols: string[],
+  cacheOnly = false
+): Promise<{ quotes: Map<string, CachedQuote>; stale: string[]; skipped: boolean }> {
   const now = Date.now();
   const out = new Map<string, CachedQuote>();
   const stale: string[] = [];
   const toFetch: string[] = [];
+  let skipped = false;
 
   const cached = await getCachedQuotes(symbols);
   for (const s of symbols) {
     const c = cached.get(s);
-    if (c && now - c.fetched_at < QUOTE_TTL_MS) out.set(s, c);
-    else toFetch.push(s);
+    if (c && (cacheOnly || now - c.fetched_at < QUOTE_TTL_MS)) {
+      out.set(s, c);
+      if (now - c.fetched_at >= QUOTE_TTL_MS) skipped = true;
+    } else toFetch.push(s);
   }
 
   await Promise.all(
@@ -61,17 +66,24 @@ export async function getQuotes(
     })
   );
 
-  return { quotes: out, stale };
+  return { quotes: out, stale, skipped };
 }
 
 /**
  * Ensure daily closes for `symbols` are cached from `fromDate` to today.
  * Refetches when the cached range starts too late or the last sync is stale.
+ * With `cacheOnly`, a range that covers `fromDate` is not refreshed even past
+ * TTL. Returns true if a symbol was skipped that a fresh pass would refetch.
  */
-export async function ensureAllHistory(symbols: string[], fromDate: string): Promise<void> {
+export async function ensureAllHistory(
+  symbols: string[],
+  fromDate: string,
+  cacheOnly = false
+): Promise<boolean> {
   const list = [...new Set([...symbols, FX_SYMBOL])];
   const now = Date.now();
   const metas = await getMetaMany(list.map((s) => `hist:${s}`));
+  let skipped = false;
 
   await Promise.all(
     list.map(async (symbol) => {
@@ -87,7 +99,11 @@ export async function ensureAllHistory(symbols: string[], fromDate: string): Pro
           /* refetch */
         }
       }
-      if (from !== null && from <= fromDate && now - syncedAt < HISTORY_TTL_MS) return;
+      if (from !== null && from <= fromDate) {
+        const fresh = now - syncedAt < HISTORY_TTL_MS;
+        if (!fresh && cacheOnly) skipped = true;
+        if (fresh || cacheOnly) return;
+      }
 
       const period1 = from && from <= fromDate ? from : fromDate;
       try {
@@ -107,6 +123,7 @@ export async function ensureAllHistory(symbols: string[], fromDate: string): Pro
       }
     })
   );
+  return skipped;
 }
 
 export async function ensureHistory(symbol: string, fromDate: string): Promise<void> {

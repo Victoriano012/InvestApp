@@ -415,26 +415,28 @@ function basketHolding(
   };
 }
 
-export async function getPortfolio(uid: number): Promise<PortfolioSummary> {
+/** Basket components per basket asset id. */
+async function loadBaskets(uid: number, assets: Asset[]): Promise<Map<number, BasketComponent[]>> {
+  const ids = assets.filter((a) => a.kind === "basket").map((a) => a.id);
+  const comps = await Promise.all(ids.map((id) => listBasketComponents(uid, id)));
+  return new Map(ids.map((id, i) => [id, comps[i]]));
+}
+
+export async function getPortfolio(uid: number, fresh = false): Promise<PortfolioSummary> {
+  const cacheOnly = !fresh;
   const [assets, txns] = await Promise.all([listAssets(uid), listTxns(uid)]);
   const today = todayISO();
   const minDate = txns.length ? txns.reduce((m, t) => (t.date < m ? t.date : m), today) : today;
 
-  const baskets = new Map<number, BasketComponent[]>();
-  for (const a of assets)
-    if (a.kind === "basket") baskets.set(a.id, await listBasketComponents(uid, a.id));
+  const baskets = await loadBaskets(uid, assets);
   const compSymbols = [...new Set([...baskets.values()].flat().map((c) => c.symbol))];
 
-  await ensureAllHistory([], minDate); // FX
-  // Component closes are needed back to the earliest basket buy (to split it).
-  const basketTxns = txns.filter((t) => baskets.has(t.asset_id));
-  if (basketTxns.length && compSymbols.length) {
-    const from = basketTxns.reduce((m, t) => (t.date < m ? t.date : m), today);
-    await ensureAllHistory(compSymbols, from);
-  }
-
   const symbols = assets.filter((a) => a.kind !== "basket").map((a) => a.symbol);
-  const { quotes, stale } = await getQuotes([...symbols, ...compSymbols, FX_SYMBOL]);
+  // FX + component closes (needed back to the earliest basket buy, to split it).
+  const [histSkipped, { quotes, stale, skipped }] = await Promise.all([
+    ensureAllHistory(compSymbols, minDate, cacheOnly),
+    getQuotes([...symbols, ...compSymbols, FX_SYMBOL], cacheOnly),
+  ]);
   const hist = await historiesMap([...compSymbols, FX_SYMBOL]);
   // Component currencies straight from the fresh quotes (fall back to USD).
   const curOf = new Map(compSymbols.map((s) => [s, quotes.get(s)?.currency ?? "USD"]));
@@ -533,25 +535,24 @@ export async function getPortfolio(uid: number): Promise<PortfolioSummary> {
     holdings,
     quotesAsOf: oldest != null ? new Date(oldest).toISOString() : null,
     staleQuotes: stale,
+    stale: histSkipped || skipped,
   };
 }
 
 // ---------- chart explorer data ----------
 
-export async function getExplorerData(uid: number): Promise<ExplorerData> {
+export async function getExplorerData(uid: number, fresh = false): Promise<ExplorerData> {
   const [assets, txns] = await Promise.all([listAssets(uid), listTxns(uid)]);
   const today = todayISO();
   const yearBack = addDays(today, -400);
   const minTxn = txns.length ? txns.reduce((m, t) => (t.date < m ? t.date : m), today) : today;
   const from = minTxn < yearBack ? minTxn : yearBack;
 
-  const baskets = new Map<number, BasketComponent[]>();
-  for (const a of assets)
-    if (a.kind === "basket") baskets.set(a.id, await listBasketComponents(uid, a.id));
+  const baskets = await loadBaskets(uid, assets);
   const compSymbols = [...new Set([...baskets.values()].flat().map((c) => c.symbol))];
 
   const ownSymbols = assets.filter((a) => a.kind !== "basket").map((a) => a.symbol);
-  await ensureAllHistory([...ownSymbols, ...compSymbols], from);
+  const stale = await ensureAllHistory([...ownSymbols, ...compSymbols], from, !fresh);
   const [hist, curOf] = await Promise.all([
     historiesMap([...ownSymbols, ...compSymbols, FX_SYMBOL]),
     componentCurrencies(compSymbols),
@@ -679,12 +680,12 @@ export async function getExplorerData(uid: number): Promise<ExplorerData> {
     };
   });
 
-  return { dates: axis, assets: out };
+  return { dates: axis, assets: out, stale };
 }
 
 // ---------- capital composition data ----------
 
-export async function getCapitalData(uid: number): Promise<CapitalData> {
+export async function getCapitalData(uid: number, fresh = false): Promise<CapitalData> {
   const [assets, txns] = await Promise.all([listAssets(uid), listTxns(uid)]);
   const today = todayISO();
   // Known categories come from CATEGORIES (single source of truth); the DB can
@@ -697,19 +698,17 @@ export async function getCapitalData(uid: number): Promise<CapitalData> {
   };
   const emptyCats = () => catRecord(() => []);
   if (txns.length === 0) {
-    return { dates: [], byCategory: emptyCats(), valueByCategory: emptyCats(), assets: [], txnDates: [] };
+    return { dates: [], byCategory: emptyCats(), valueByCategory: emptyCats(), assets: [], txnDates: [], stale: false };
   }
   const from = txns.reduce((m, t) => (t.date < m ? t.date : m), today);
-  const baskets = new Map<number, BasketComponent[]>();
-  for (const a of assets)
-    if (a.kind === "basket") baskets.set(a.id, await listBasketComponents(uid, a.id));
+  const baskets = await loadBaskets(uid, assets);
   const compSymbols = [...new Set([...baskets.values()].flat().map((c) => c.symbol))];
   const txnAssetIds = new Set(txns.map((t) => t.asset_id));
   // Market value needs each traded asset's price history, not just FX + baskets.
   const tradedSymbols = assets
     .filter((a) => a.kind !== "basket" && txnAssetIds.has(a.id))
     .map((a) => a.symbol);
-  await ensureAllHistory([...tradedSymbols, ...compSymbols], from);
+  const stale = await ensureAllHistory([...tradedSymbols, ...compSymbols], from, !fresh);
   const [hist, curOf] = await Promise.all([
     historiesMap([...tradedSymbols, ...compSymbols, FX_SYMBOL]),
     componentCurrencies(compSymbols),
@@ -793,5 +792,5 @@ export async function getCapitalData(uid: number): Promise<CapitalData> {
     .sort((a, b) => (a[0] < b[0] ? -1 : 1))
     .map(([date, list]) => ({ date, txns: list }));
 
-  return { dates: axis, byCategory, valueByCategory, assets: assetSeries, txnDates };
+  return { dates: axis, byCategory, valueByCategory, assets: assetSeries, txnDates, stale };
 }

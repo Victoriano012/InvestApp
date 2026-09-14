@@ -109,6 +109,7 @@ export interface PortfolioSummary {
   holdings: Holding[];
   quotesAsOf: string | null; // ISO timestamp of oldest quote used
   staleQuotes: string[]; // symbols whose quote fetch failed (using cache)
+  stale: boolean; // served from past-TTL caches; `?fresh=1` would refresh
 }
 
 // ---- Chart explorer payload ----
@@ -144,6 +145,7 @@ export interface ExplorerAsset {
 export interface ExplorerData {
   dates: string[]; // calendar dates, YYYY-MM-DD
   assets: ExplorerAsset[];
+  stale: boolean; // served from past-TTL caches; `?fresh=1` would refresh
 }
 
 // ---- Capital composition payload ----
@@ -179,4 +181,5 @@ export interface CapitalData {
       amountEUR: number;
     }[];
   }[];
+  stale: boolean; // served from past-TTL caches; `?fresh=1` would refresh
 }

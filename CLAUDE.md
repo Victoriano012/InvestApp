@@ -76,10 +76,14 @@ Postgres.
 ## Testing
 
 `npm run build` type-checks. For runtime checks: start with
-`INVESTAPP_PG_DIR=/tmp/pgtest AUTH_SECRET=test AUTH_DEV_USER=test@local
-PORT=3199 npm start`, POST sample transactions to `/api/transactions`, then
-verify `/api/portfolio`, `/api/series`, `/api/capital`. Never point tests at
-the default `data/pg` directory or at the production `DATABASE_URL`.
+`env -u DATABASE_URL INVESTAPP_PG_DIR=/tmp/pgtest AUTH_SECRET=test
+AUTH_DEV_USER=test@local PORT=3199 npm start`, POST sample transactions to
+`/api/transactions`, then verify `/api/portfolio`, `/api/series`,
+`/api/capital`. Never point tests at the default `data/pg` directory or at
+the production `DATABASE_URL` — **the shell profile exports the production
+`DATABASE_URL`, so `env -u DATABASE_URL` is mandatory** (and `.env*` files
+would be loaded too). `/api/*` reads answer from the DB market cache and
+report `stale: true`; `?fresh=1` forces the Yahoo refresh.
 Local prod-mode auth testing additionally needs `AUTH_TRUST_HOST=true`
 (automatic on Vercel).
 
