@@ -93,8 +93,8 @@ export default function ChartExplorer() {
 
   const metricDef = METRICS.find((m) => m.key === metric)!;
   const lotCapable = metric === "gain_abs" || metric === "gain_pct";
-  // Per-buy lines are meaningless for groups — ignored there, preference kept.
-  const usePerLot = perLot && lotCapable && grouping === "asset";
+  // In Groups mode, per-buy splits every asset of the picked groups.
+  const usePerLot = perLot && lotCapable;
 
   const win = rangeWindow(rangeSel, todayISO());
   // "All" spans the selected assets' history, not the whole dataset's.
@@ -116,7 +116,7 @@ export default function ChartExplorer() {
       from: winFrom,
       to: win.to,
       usePerLot,
-      groups: grouping === "category",
+      groups: grouping === "category" && !usePerLot,
       dark,
     });
   }, [data, effSel, metric, winFrom, win.to, usePerLot, grouping, dark]);
@@ -191,7 +191,7 @@ export default function ChartExplorer() {
           max={data.dates[data.dates.length - 1]}
           windowFrom={winFrom}
         />
-        {lotCapable && grouping === "asset" && (
+        {lotCapable && (
           <Check label="One line per buy" checked={perLot} onChange={setPerLot} title="Split each asset into one line per purchase, measured from that purchase" />
         )}
       </div>
