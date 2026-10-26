@@ -35,12 +35,12 @@ export default function Nav() {
   return (
     <>
       {/* Mobile: the current tab's title as a large heading that scrolls with the page */}
-      <div className="mx-auto w-full max-w-6xl px-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] md:hidden">
+      <div className="mx-auto w-full max-w-6xl px-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] md:hidden short:block">
         <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
       </div>
 
       {/* Desktop top bar */}
-      <header className="hidden md:block sticky top-0 z-20 border-b border-line bg-surface/90 backdrop-blur">
+      <header className="hidden md:block short:hidden sticky top-0 z-20 border-b border-line bg-surface/90 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center gap-1 px-4 py-2">
           <Link href="/" className="mr-4 text-base font-semibold tracking-tight">
             InvestApp
@@ -63,7 +63,7 @@ export default function Nav() {
       </header>
 
       {/* Mobile bottom tab bar */}
-      <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-line bg-surface md:hidden pb-[env(safe-area-inset-bottom)]">
+      <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-line bg-surface md:hidden short:block pb-[env(safe-area-inset-bottom)]">
         <div className="grid grid-cols-4">
           {ITEMS.map((it) => (
             <Link

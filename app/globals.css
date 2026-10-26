@@ -84,3 +84,9 @@ input[type="number"] {
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
 }
+
+/* Phone held horizontally: a short viewport, so the page keeps its phone
+   chrome (title, tab bar at the bottom) and sizes the plot off the viewport
+   instead of a fixed height. The width cap keeps real desktops out — a
+   landscape phone tops out around 1000 CSS px, past the `md` breakpoint. */
+@custom-variant short (@media (max-height: 500px) and (orientation: landscape) and (max-width: 1024px));

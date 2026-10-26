@@ -265,7 +265,7 @@ export default function ChartExplorer() {
       {/* Chart */}
       <div className="rounded-lg border border-line bg-surface p-2 max-sm:-mx-4 max-sm:rounded-none max-sm:border-x-0 md:p-3">
         {series.length === 0 ? (
-          <div className="flex h-[340px] w-full items-center justify-center md:h-[440px]">
+          <div className="flex h-[340px] w-full items-center justify-center md:h-[440px] short:h-[calc(100dvh-4.5rem)]">
             <p className="p-10 text-center text-sm text-muted">
               {effSel.length === 0
                 ? grouping === "category"
@@ -283,7 +283,7 @@ export default function ChartExplorer() {
             // cursor position for a frame before flipping it inside the plot;
             // near the right edge that transient overflow makes mobile Chrome
             // ratchet the layout viewport wider (page zooms out permanently).
-            className="h-[340px] w-full touch-pan-y select-none max-sm:overflow-x-clip md:h-[440px]"
+            className="h-[340px] w-full touch-pan-y select-none max-sm:overflow-x-clip md:h-[440px] short:h-[calc(100dvh-4.5rem)]"
             title="Drag to zoom — double-click to reset to the range picked above"
             onMouseLeave={() => setHoverKey(null)}
             {...zoom.touchHandlers}
@@ -388,7 +388,6 @@ export default function ChartExplorer() {
             </ResponsiveContainer>
           </div>
         )}
-
       </div>
 
       {/* Picker — doubles as the legend. Groups mode: category chips (as in Capital). */}
