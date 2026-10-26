@@ -13,7 +13,7 @@ import {
   Tooltip,
   XAxis,
   YAxis,
-  useYAxisInverseScale,
+  useYAxisScale,
 } from "recharts";
 import { useDark, useJson } from "./hooks";
 import RangeControl, { rangeWindow, useDragZoom, type RangeSel } from "./RangeControl";
@@ -23,6 +23,19 @@ import { CATEGORIES, type Category, type ExplorerData } from "@/lib/types";
 
 type Metric = "value" | "gain_abs" | "gain_pct";
 type Grouping = "category" | "asset";
+type PercentScale = "linear" | "log";
+
+// Recharts' symlog uses sign(r) * ln(1 + |r|), where r is the return
+// ratio (1 = 100%). Keep the data in ratios: every line, hit target,
+// reference mark and tooltip then shares the same axis mapping.
+function logPercentDomain([min, max]: readonly [number, number]): [number, number] {
+  const lo = Math.min(0, min);
+  const hi = Math.max(0, max);
+  // Give empty/all-zero series a finite, non-degenerate axis around zero.
+  return lo === hi || !Number.isFinite(lo) || !Number.isFinite(hi)
+    ? [-0.01, 0.01]
+    : [lo, hi];
+}
 
 const METRICS: { key: Metric; label: string; pct: boolean; title: string }[] = [
   { key: "gain_pct", label: "Gain %", pct: true, title: "Profit in % of all cash paid into buys (including fees and realized gains)" },
@@ -46,6 +59,7 @@ export default function ChartExplorer() {
 
   const [selected, setSelected] = useState<number[] | null>(null);
   const [metric, setMetric] = useState<Metric>("gain_pct");
+  const [percentScale, setPercentScale] = useState<PercentScale>("linear");
   const [rangeSel, setRangeSel] = useState<RangeSel>({ preset: "all", from: "", to: "" });
   // Last range set explicitly (presets/calendar) — what a double-click
   // returns to, so consecutive drag zooms don't overwrite it.
@@ -155,6 +169,7 @@ export default function ChartExplorer() {
     rows.length
   );
   const isPct = metricDef.pct;
+  const isLog = isPct && percentScale === "log";
   const fmtY = (v: number) => (isPct ? fmtPct(v, false, Math.abs(v) < 0.001 ? 2 : 1) : fmtEUR(v, true));
 
   const toggleAsset = (id: number) =>
@@ -177,6 +192,17 @@ export default function ChartExplorer() {
       {/* Options row */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
         <Seg options={METRICS.map((m) => ({ k: m.key, l: m.label, t: m.title }))} value={metric} onChange={(v) => setMetric(v as Metric)} />
+        {isPct && (
+          <span className="flex items-center gap-1.5">
+            <span className="text-muted">Scale</span>
+            <Toggle
+              options={[{ k: "linear", l: "Linear" }, { k: "log", l: "Log" }]}
+              value={percentScale}
+              onChange={(v) => setPercentScale(v as PercentScale)}
+              title="Gain percentage scale"
+            />
+          </span>
+        )}
         <Toggle
           options={[{ k: "category", l: "Groups" }, { k: "asset", l: "Assets" }]}
           value={grouping}
@@ -195,6 +221,14 @@ export default function ChartExplorer() {
           <Check label="One line per buy" checked={perLot} onChange={setPerLot} title="Split each asset into one line per purchase, measured from that purchase" />
         )}
       </div>
+
+      {isLog && (
+        <p className="text-xs text-muted">
+          Log uses a symmetric logarithmic scale: sign(r) × ln(1 + |r|), where r is the return
+          (100% = 1). It is nearly linear near 0% and compresses large gains and losses equally.
+          Zero and negative returns stay visible; labels and tooltips show the original percentages.
+        </p>
+      )}
 
       {/* Chart */}
       <div className="rounded-lg border border-line bg-surface p-2 max-sm:-mx-4 max-sm:rounded-none max-sm:border-x-0 md:p-3">
@@ -244,6 +278,8 @@ export default function ChartExplorer() {
                   minTickGap={40}
                 />
                 <YAxis
+                  scale={isLog ? "symlog" : "auto"}
+                  domain={isLog ? logPercentDomain : undefined}
                   tick={{ fill: C.muted, fontSize: 11 }}
                   tickLine={false}
                   axisLine={false}
@@ -420,10 +456,11 @@ function Toggle({
   title?: string;
 }) {
   return (
-    <span className="inline-flex overflow-hidden rounded-md border border-line text-sm" title={title}>
+    <span className="inline-flex overflow-hidden rounded-md border border-line text-sm" title={title} role="group" aria-label={title}>
       {options.map((o) => (
         <button
           key={o.k}
+          aria-pressed={value === o.k}
           onClick={() => onChange(o.k)}
           className={`px-2.5 py-1 ${value === o.k ? "bg-accent/15 font-semibold text-accent" : "bg-surface text-muted hover:text-ink2"}`}
         >
@@ -509,7 +546,7 @@ function ChartTip({
   chromeC: ReturnType<typeof chrome>;
   txns: Map<string, { id: number; type: "buy" | "sell"; name: string; amount: string }[]>;
 }) {
-  const yInverse = useYAxisInverseScale();
+  const yScale = useYAxisScale();
   if (!active || !payload?.length) return null;
   // Transparent strokes are the hover-hit helpers, not real series.
   const items = [...payload]
@@ -517,11 +554,14 @@ function ChartTip({
     .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
   // Which line is the cursor vertically nearest? Bold that entry (as in CapTip).
   let hotName: string | null = null;
-  if (coordinate?.y != null && yInverse) {
-    const target = Number(yInverse(coordinate.y));
+  if (coordinate?.y != null && yScale) {
     let bestDist = Infinity;
     for (const p of items) {
-      const dist = Math.abs((p.value ?? 0) - target);
+      // Compare screen distances: raw return differences pick the wrong
+      // nearest line on a nonlinear axis.
+      const pixelY = yScale(p.value ?? 0);
+      if (pixelY == null) continue;
+      const dist = Math.abs(pixelY - coordinate.y);
       if (dist < bestDist) {
         bestDist = dist;
         hotName = p.name ?? null;
