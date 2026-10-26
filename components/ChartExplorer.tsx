@@ -49,19 +49,32 @@ function logPercentDomain(min: number, max: number): [number, number] {
 // band around 0% unlabelled. Use a 1/2/5 ladder instead, thinned so no two
 // labels land closer than 1/14 of the axis, and always keep 0%.
 const LOG_TICKS = [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50];
+// Round towards zero onto a half-decade step: 3.86 → 3.5, 0.26 → 0.25.
+function roundToward0(v: number) {
+  const step = Math.pow(10, Math.floor(Math.log10(Math.abs(v)))) / 2;
+  return Math.sign(v) * Math.floor(Math.abs(v) / step) * step;
+}
+
 function logPercentTicks([lo, hi]: [number, number]): number[] {
   const gap = (symT(hi) - symT(lo)) / 14;
   const out = [0];
   for (const side of [1, -1]) {
+    const end = side > 0 ? hi : lo;
     let last = 0;
+    let lastV = 0;
     for (const m of LOG_TICKS) {
       const v = side * m;
       if (v > hi || v < lo) break;
       if (Math.abs(symT(v) - last) >= gap) {
         out.push(v);
         last = symT(v);
+        lastV = v;
       }
     }
+    // The ladder's last rung can sit far below the end of the axis (200% under
+    // a 370% peak) — label the end too, so no stretch is left without a number.
+    const near = end === 0 ? 0 : roundToward0(end);
+    if (Math.abs(near) > Math.abs(lastV) && Math.abs(symT(near) - last) >= gap) out.push(near);
   }
   return out.sort((a, b) => a - b);
 }
@@ -248,15 +261,6 @@ export default function ChartExplorer() {
           />
         )}
       </div>
-
-      {isLog && (
-        <p className="text-xs text-muted">
-          Log plots sign(r) × ln(1 + |r|), r being the return (100% = 1): on the gain side that is
-          the log of the growth factor, so equal vertical steps are equal multiples, and the loss
-          side mirrors it — 0% and negative returns stay on the chart instead of being dropped or
-          clamped. Ticks and tooltips keep the real percentages.
-        </p>
-      )}
 
       {/* Chart */}
       <div className="rounded-lg border border-line bg-surface p-2 max-sm:-mx-4 max-sm:rounded-none max-sm:border-x-0 md:p-3">
