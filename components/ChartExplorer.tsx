@@ -222,17 +222,6 @@ export default function ChartExplorer() {
       {/* Options row */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
         <Seg options={METRICS.map((m) => ({ k: m.key, l: m.label, t: m.title }))} value={metric} onChange={(v) => setMetric(v as Metric)} />
-        {isPct && (
-          <span className="flex items-center gap-1.5">
-            <span className="text-muted">Scale</span>
-            <Toggle
-              options={[{ k: "linear", l: "Linear" }, { k: "log", l: "Log" }]}
-              value={percentScale}
-              onChange={(v) => setPercentScale(v as PercentScale)}
-              title="Gain percentage scale"
-            />
-          </span>
-        )}
         <Toggle
           options={[{ k: "category", l: "Groups" }, { k: "asset", l: "Assets" }]}
           value={grouping}
@@ -249,6 +238,14 @@ export default function ChartExplorer() {
         />
         {lotCapable && (
           <Check label="One line per buy" checked={perLot} onChange={setPerLot} title="Split each asset into one line per purchase, measured from that purchase" />
+        )}
+        {isPct && (
+          <Check
+            label="Log scale"
+            checked={percentScale === "log"}
+            onChange={(v) => setPercentScale(v ? "log" : "linear")}
+            title="Symmetric log scale: equal vertical steps are equal multiples, zero and losses included"
+          />
         )}
       </div>
 
