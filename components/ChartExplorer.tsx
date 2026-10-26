@@ -25,16 +25,45 @@ type Metric = "value" | "gain_abs" | "gain_pct";
 type Grouping = "category" | "asset";
 type PercentScale = "linear" | "log";
 
-// Recharts' symlog uses sign(r) * ln(1 + |r|), where r is the return
-// ratio (1 = 100%). Keep the data in ratios: every line, hit target,
-// reference mark and tooltip then shares the same axis mapping.
-function logPercentDomain([min, max]: readonly [number, number]): [number, number] {
+// Log scale for returns = recharts' "symlog": t(r) = sign(r) · ln(1 + |r|),
+// with r the return ratio (1 = +100%). On the gain side that is exactly the
+// log of the growth factor, so equal vertical steps are equal multiples; the
+// loss side mirrors it, which keeps 0% and any negative return — even a total
+// wipe-out — on the chart instead of dropping or clamping it. The data stays
+// in ratios, so lines, hit targets, markers and tooltips share one mapping.
+const symT = (r: number) => Math.sign(r) * Math.log1p(Math.abs(r));
+const symInv = (t: number) => Math.sign(t) * Math.expm1(Math.abs(t));
+
+// Axis window: always spans 0%, plus 4% of breathing room on both ends so a
+// peak doesn't sit exactly on the plot edge (nice ticks do that on linear).
+function logPercentDomain(min: number, max: number): [number, number] {
   const lo = Math.min(0, min);
   const hi = Math.max(0, max);
-  // Give empty/all-zero series a finite, non-degenerate axis around zero.
-  return lo === hi || !Number.isFinite(lo) || !Number.isFinite(hi)
-    ? [-0.01, 0.01]
-    : [lo, hi];
+  // Empty/all-zero/non-finite series: a finite, non-degenerate axis around 0.
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) return [-0.01, 0.01];
+  const pad = (symT(hi) - symT(lo)) * 0.04;
+  return [symInv(symT(lo) - pad), symInv(symT(hi) + pad)];
+}
+
+// d3's symlog ticks are evenly spaced in *value*, which leaves the stretched
+// band around 0% unlabelled. Use a 1/2/5 ladder instead, thinned so no two
+// labels land closer than 1/14 of the axis, and always keep 0%.
+const LOG_TICKS = [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50];
+function logPercentTicks([lo, hi]: [number, number]): number[] {
+  const gap = (symT(hi) - symT(lo)) / 14;
+  const out = [0];
+  for (const side of [1, -1]) {
+    let last = 0;
+    for (const m of LOG_TICKS) {
+      const v = side * m;
+      if (v > hi || v < lo) break;
+      if (Math.abs(symT(v) - last) >= gap) {
+        out.push(v);
+        last = symT(v);
+      }
+    }
+  }
+  return out.sort((a, b) => a - b);
 }
 
 const METRICS: { key: Metric; label: string; pct: boolean; title: string }[] = [
@@ -170,6 +199,7 @@ export default function ChartExplorer() {
   );
   const isPct = metricDef.pct;
   const isLog = isPct && percentScale === "log";
+  const logAxis = isLog ? logPercentDomain(model.extent[0], model.extent[1]) : null;
   const fmtY = (v: number) => (isPct ? fmtPct(v, false, Math.abs(v) < 0.001 ? 2 : 1) : fmtEUR(v, true));
 
   const toggleAsset = (id: number) =>
@@ -224,9 +254,10 @@ export default function ChartExplorer() {
 
       {isLog && (
         <p className="text-xs text-muted">
-          Log uses a symmetric logarithmic scale: sign(r) × ln(1 + |r|), where r is the return
-          (100% = 1). It is nearly linear near 0% and compresses large gains and losses equally.
-          Zero and negative returns stay visible; labels and tooltips show the original percentages.
+          Log plots sign(r) × ln(1 + |r|), r being the return (100% = 1): on the gain side that is
+          the log of the growth factor, so equal vertical steps are equal multiples, and the loss
+          side mirrors it — 0% and negative returns stay on the chart instead of being dropped or
+          clamped. Ticks and tooltips keep the real percentages.
         </p>
       )}
 
@@ -268,7 +299,9 @@ export default function ChartExplorer() {
                 onMouseMove={(e) => zoom.move(e?.activeLabel)}
                 onMouseUp={zoom.end}
               >
-                <CartesianGrid stroke={C.grid} strokeWidth={1} vertical={false} />
+                {/* syncWithTicks: without it the grid adds unlabelled lines at the
+                    plot edges — invisible on linear (the edges are ticks), not on log. */}
+                <CartesianGrid stroke={C.grid} strokeWidth={1} vertical={false} syncWithTicks />
                 <XAxis
                   dataKey="date"
                   tick={{ fill: C.muted, fontSize: 11 }}
@@ -279,7 +312,8 @@ export default function ChartExplorer() {
                 />
                 <YAxis
                   scale={isLog ? "symlog" : "auto"}
-                  domain={isLog ? logPercentDomain : undefined}
+                  domain={logAxis ?? undefined}
+                  ticks={logAxis ? logPercentTicks(logAxis) : undefined}
                   tick={{ fill: C.muted, fontSize: 11 }}
                   tickLine={false}
                   axisLine={false}
@@ -854,5 +888,17 @@ function buildModel(data: ExplorerData, o: ModelOpts) {
     }
   }
 
-  return { rows, series, trades };
+  // Plotted min/max — the log axis needs the domain up front to lay its ticks out.
+  let vMin = 0;
+  let vMax = 0;
+  for (const r of rows)
+    for (const s of series) {
+      const v = r[s.key];
+      if (typeof v === "number") {
+        if (v < vMin) vMin = v;
+        if (v > vMax) vMax = v;
+      }
+    }
+
+  return { rows, series, trades, extent: [vMin, vMax] as [number, number] };
 }
