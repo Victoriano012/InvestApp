@@ -292,7 +292,7 @@ export default function ChartExplorer() {
               <LineChart
                 data={rows}
                 accessibilityLayer={false} // keeps the svg unfocusable — no focus rectangle on click
-                margin={{ top: 10, right: 12, bottom: 0, left: 4 }}
+                margin={{ top: 10, right: 28, bottom: 0, left: 4 }} // right: hover/touch dead zone for the last day (see useDragZoom's edgeClamp)
                 onMouseDown={(e, ev) => {
                   ev?.preventDefault(); // stop native text-selection/drag (Firefox/Safari ignore user-select on SVG mid-drag)
                   zoom.start(e?.activeLabel);

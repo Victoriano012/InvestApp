@@ -41,6 +41,8 @@ export interface TxnMark {
  * hovered SVG node mid-press, so the browser never synthesizes native
  * click/dblclick events over the marks.
  */
+const EDGE_EVENTS = ["mousemove", "mousedown", "touchstart", "touchmove"] as const;
+
 export function useDragZoom(handlers: {
   onZoom: (from: string, to: string) => void;
   /** Double-click (two stationary presses within 400ms). */
@@ -117,18 +119,37 @@ export function useDragZoom(handlers: {
     const r = e.relatedTarget;
     if ((t instanceof Node && el.contains(t)) || (r instanceof Node && el.contains(r))) e.stopPropagation();
   }, []);
+  // The newest point sits on the plot's right edge, so it owns only half a
+  // step of hit area and recharts drops anything further right (its
+  // isInCartesianRange gate) instead of resolving it to the last index.
+  // Pull such pointers back onto the edge before recharts reads them — in
+  // the capture phase, so the chart's own handlers (tooltip, crosshair,
+  // drag-zoom) all see the last day. The charts leave a right margin wide
+  // enough for this to be a comfortable target.
+  const edgeClamp = useCallback((e: MouseEvent | TouchEvent) => {
+    const el = containerEl.current;
+    const rect = el?.querySelector(".recharts-cartesian-grid")?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return;
+    const pull = (p: MouseEvent | Touch) => {
+      if (p.clientX > rect.right) Object.defineProperty(p, "clientX", { value: rect.right, configurable: true });
+    };
+    if ("touches" in e) Array.from(e.touches).forEach(pull);
+    else pull(e);
+  }, []);
   const containerRef = useCallback(
     (node: HTMLDivElement | null) => {
       if (containerEl.current && !node) {
         document.removeEventListener("mouseout", ghostFilter, true);
         document.removeEventListener("mouseover", ghostFilter, true);
+        for (const t of EDGE_EVENTS) containerEl.current.removeEventListener(t, edgeClamp, true);
       } else if (node && !containerEl.current) {
         document.addEventListener("mouseout", ghostFilter, true);
         document.addEventListener("mouseover", ghostFilter, true);
+        for (const t of EDGE_EVENTS) node.addEventListener(t, edgeClamp, true);
       }
       containerEl.current = node;
     },
-    [ghostFilter]
+    [ghostFilter, edgeClamp]
   );
   const datesRef = useRef<string[]>([]);
   const setDates = (dates: string[]) => {
