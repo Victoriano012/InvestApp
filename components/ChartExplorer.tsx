@@ -720,19 +720,33 @@ function buildModel(data: ExplorerData, o: ModelOpts) {
         return g != null ? g - base : null;
       });
     }
-    // Window rebase in EUR: gain earned inside the range, as a percentage of
-    // all cash paid into buys. Sells never shrink this denominator, and a buy
-    // whose date is visible includes its fee drag instead of starting at zero.
-    let baseEUR = 0;
+    // Window rebase in EUR: gain earned inside the range over the capital at
+    // risk for it — what the position was worth entering the window, plus the
+    // cash buys inside it put in. Lifetime contributions would be the wrong
+    // scale for a short window: a position that had already tripled on €1000
+    // would plot a €1200 drawdown as -120% instead of -40%.
+    // Sells never shrink this denominator (the entry worth is fixed and
+    // contributions never fall), and a buy whose date is visible includes its
+    // fee drag instead of starting at zero. On the full range the entry worth
+    // is 0 and the base contributions are 0, so this stays lifetime gain over
+    // lifetime contributions — the number this chart has always shown.
+    let baseEUR = 0; // gain accumulated before the window
+    let baseValueEUR = 0; // worth of the holding entering the window
+    let baseContributedEUR = 0; // cash paid into buys before the window
     for (let j = i0 - 1; j >= 0; j--) {
       const g = gainAt(j);
-      if (g != null) { baseEUR = g; break; }
+      if (g != null) {
+        baseEUR = g;
+        baseValueEUR = src.valueEUR[j] ?? 0;
+        baseContributedEUR = src.contributedEUR[j];
+        break;
+      }
     }
     return dates.map((_, i) => {
       const j = i0 + i;
       const g = gainAt(j);
-      const contributed = src.contributedEUR[j];
-      return g != null && contributed > 0 ? (g - baseEUR) / contributed : null;
+      const atRisk = baseValueEUR + (src.contributedEUR[j] - baseContributedEUR);
+      return g != null && atRisk > 0 ? (g - baseEUR) / atRisk : null;
     });
   };
   const firstTxnOf = (txns: { date: string }[]) =>
@@ -772,23 +786,30 @@ function buildModel(data: ExplorerData, o: ModelOpts) {
     const color = categoryColor(a.category, o.dark);
     if (o.usePerLot) {
       a.lots.forEach((lot) => {
-        const lotVal = (j: number): number | null => {
+        const unitAt = (j: number): number | null => {
           if (data.dates[j] < lot.date) return null;
           // Baskets ship the lot's exact per-unit value series; singles use the price.
-          const p = lot.unitValueEUR ? lot.unitValueEUR[j] : a.priceEUR[j];
-          if (p == null) return null;
-          if (o.metric === "gain_abs") return (p - lot.priceEUR) * lot.quantity;
-          return p / lot.priceEUR - 1; // gain_pct per lot
+          return lot.unitValueEUR ? lot.unitValueEUR[j] : a.priceEUR[j];
         };
-        // Gains count from the window start, not from the buy.
-        let base = 0;
+        // Gains count from the window start, not from the buy: in € subtract
+        // what the lot had already gained, in % divide by what one unit was
+        // worth entering the window (same rebase as the aggregate lines).
+        // A lot bought inside the window keeps its own entry price as the
+        // reference, so its fee drag still shows.
+        let baseAbs = 0;
+        let refEUR = lot.priceEUR;
         for (let j = i0 - 1; j >= 0; j--) {
-          const v = lotVal(j);
-          if (v != null) { base = v; break; }
+          const p = unitAt(j);
+          if (p != null) {
+            baseAbs = (p - lot.priceEUR) * lot.quantity;
+            refEUR = p;
+            break;
+          }
         }
         const vals = dates.map((_, i) => {
-          const v = lotVal(i0 + i);
-          return v != null ? v - base : null;
+          const p = unitAt(i0 + i);
+          if (p == null) return null;
+          return o.metric === "gain_abs" ? (p - lot.priceEUR) * lot.quantity - baseAbs : p / refEUR - 1;
         });
         series.push({
           key: `a${a.id}l${lot.txnId}`,
