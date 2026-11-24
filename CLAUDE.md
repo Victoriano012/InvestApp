@@ -93,3 +93,11 @@ Vercel project → Neon via Vercel Storage (sets `DATABASE_URL`); env vars
 `AUTH_SECRET`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET` (Google OAuth redirect
 URI: `https://<domain>/api/auth/callback/google`). One-time data import:
 `DATABASE_URL=... OWNER_EMAIL=... node scripts/push-to-neon.mjs <sqlite file>`.
+
+**Every finished change ships to production — no approval needed first.**
+Commit (repo git identity victorconchello@gmail.com, which Vercel requires; no
+Claude attribution), `git pull --rebase origin master` (other sessions push
+too), `git push origin master` — Vercel auto-deploys master to
+https://invest-vcv.vercel.app. Then confirm the production deployment is
+Ready (`~/.local/bin/vercel ls invest-app`); if the build fails, fix and push
+again. Victor reviews on the live site.
