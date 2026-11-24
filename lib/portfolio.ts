@@ -4,7 +4,7 @@ import {
   FX_SYMBOL,
   getQuotes,
   historiesMap,
-  jumpSplit,
+  type Histories,
 } from "./market";
 import { addDays, daysBetween, todayISO } from "./format";
 import { CATEGORIES } from "./types";
@@ -111,13 +111,16 @@ function buildFx(from: string, to: string, hist: Hist, fallback: number | null =
 /**
  * Restate txns in the history's share basis. Stored quantity/price are in the
  * trade date's basis, but history is split-adjusted to today's, so a split
- * after the buy would value n× too many/few shares. Spot it by comparing the
- * txn price with that day's close, by the history's own split rule (common
- * ratios only, none for crypto/FX/indices), so a mistyped price stays as is;
- * rescale keeping quantity × price unchanged.
+ * after the trade would value n× too many/few shares. Rescale (keeping
+ * quantity × price) by the splits dated after the trade, if the txn price sits
+ * nearer that pre-split basis than today's; no split after it, no change.
  */
-function toHistoryBasis(txns: Txn[], closes: Map<string, number>, symbol: string): Txn[] {
+function toHistoryBasis(txns: Txn[], hist: Histories, symbol: string): Txn[] {
+  const closes = histOf(hist, symbol);
+  const splits = hist.splits.get(symbol) ?? [];
   return txns.map((t) => {
+    const n = splits.reduce((f, s) => (s.date > t.date ? f * s.ratio : f), 1);
+    if (n === 1) return t;
     let close: number | undefined;
     for (const [d, c] of closes) {
       // Txn before the cached history (e.g. a weekend buy): next close, if within a week.
@@ -127,8 +130,8 @@ function toHistoryBasis(txns: Txn[], closes: Map<string, number>, symbol: string
       }
       close = c;
     }
-    const n = close ? jumpSplit(t.price / close, t.date, [], symbol) : 1;
-    return n === 1 ? t : { ...t, quantity: t.quantity * n, price: t.price / n };
+    const r = close ? t.price / close : 1;
+    return Math.abs(Math.log(r / n)) < Math.abs(Math.log(r)) ? { ...t, quantity: t.quantity * n, price: t.price / n } : t;
   });
 }
 
@@ -549,7 +552,7 @@ export async function getPortfolio(uid: number, fresh = false): Promise<Portfoli
       holdings.push(h);
       continue;
     }
-    const at = toHistoryBasis(txns.filter((t) => t.asset_id === asset.id), histOf(hist, asset.symbol), asset.symbol);
+    const at = toHistoryBasis(txns.filter((t) => t.asset_id === asset.id), hist, asset.symbol);
     // Live quote, else the last cached close (never value a holding at 0 for a missing quote).
     const priceNative = quotes.get(asset.symbol)?.price ?? lastValue(histOf(hist, asset.symbol));
     const f = eurFactor(asset.currency, fxNow);
@@ -718,7 +721,7 @@ export async function getExplorerData(uid: number, fresh = false): Promise<Explo
       };
     }
 
-    const at = toHistoryBasis(txns.filter((t) => t.asset_id === asset.id), histOf(hist, asset.symbol), asset.symbol);
+    const at = toHistoryBasis(txns.filter((t) => t.asset_id === asset.id), hist, asset.symbol);
     const nativeHistory = new Map(histOf(hist, asset.symbol));
     // A transaction can be dated on a weekend/holiday. Use its execution
     // price when no market close exists so the series and trade marker begin
@@ -832,7 +835,7 @@ export async function getCapitalData(uid: number, fresh = false): Promise<Capita
         value[i] = tl.valueEUR[i];
       }
     } else {
-      const tl = computeTimeline(toHistoryBasis(at, histOf(hist, asset.symbol), asset.symbol), axis, asset.currency, fx);
+      const tl = computeTimeline(toHistoryBasis(at, hist, asset.symbol), axis, asset.currency, fx);
       const priceNative = ffill(axis, histOf(hist, asset.symbol));
       for (let i = 0; i < axis.length; i++) {
         invested[i] = tl.costEUR[i];

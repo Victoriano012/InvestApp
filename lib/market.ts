@@ -206,7 +206,7 @@ const SPLITS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 
  * for 2 (AAPL's real -52% day in 2000 is 2.08), 5% below 10, 8% from 10 up
  * (a quote vs a days-old close: 60:1 plus a -5% move must still read 60). 1 if none.
  */
-export function jumpSplit(ratio: number, date: string, splits: Split[], symbol: string): number {
+function jumpSplit(ratio: number, date: string, splits: Split[], symbol: string): number {
   if (!(ratio > 0) || !isFinite(ratio)) return 1;
   for (const s of splits) {
     if (Math.abs(daysBetween(s.date, date)) <= 14 && Math.abs(Math.log(ratio / s.ratio)) < 0.1) return s.ratio;
@@ -243,44 +243,55 @@ function dropBadTicks<T extends { close: number }>(rows: T[]): T[] {
  * appeared dated 2026-11-23). Drop bad ticks, then restate closes before any
  * split-sized jump into the latest share basis. `latest` (a live quote newer
  * than the last close) anchors that basis, so a split between the last
- * cached close and the quote also restates the history.
+ * cached close and the quote also restates the history. Also returns every
+ * split: the detected jumps plus the Yahoo events already restated (no jump).
  */
 export function splitAdjusted<T extends { date: string; close: number }>(
   rows: T[],
   symbol: string,
   splits: Split[] = [],
   latest?: { date: string; close: number }
-): T[] {
+): { rows: T[]; splits: Split[] } {
   const anchored = latest && (!rows.length || latest.date >= rows[rows.length - 1].date);
   const clean = dropBadTicks<{ date: string; close: number }>(anchored ? [...rows, latest] : rows);
   const out = clean.slice();
+  const found: Split[] = [];
   let f = 1;
   for (let i = out.length - 1; i > 0; i--) {
-    f /= jumpSplit(clean[i - 1].close / clean[i].close, clean[i].date, splits, symbol);
+    const n = jumpSplit(clean[i - 1].close / clean[i].close, clean[i].date, splits, symbol);
+    if (n !== 1) found.push({ date: clean[i].date, ratio: n });
+    f /= n;
     if (f !== 1) out[i - 1] = { ...clean[i - 1], close: clean[i - 1].close * f };
   }
   if (anchored && clean[clean.length - 1] === latest) out.pop();
-  return out as T[];
+  const restated = splits.filter(
+    (s) => !found.some((j) => j.ratio === s.ratio && Math.abs(daysBetween(s.date, j.date)) <= 14)
+  );
+  return { rows: out as T[], splits: [...found, ...restated] };
 }
+
+/** Daily closes per symbol (date -> close), plus each symbol's splits. */
+export type Histories = Map<string, Map<string, number>> & { splits: Map<string, Split[]> };
 
 /**
  * Cached daily closes as symbol -> (date -> close) maps (after
  * ensureAllHistory): bad ticks dropped, split-adjusted to the basis of the
  * cached quote when that is newer than the last close.
  */
-export async function historiesMap(symbols: string[]): Promise<Map<string, Map<string, number>>> {
+export async function historiesMap(symbols: string[]): Promise<Histories> {
   const list = [...new Set(symbols)];
   const [hist, metas, quotes] = await Promise.all([
     getHistories(list),
     getMetaMany(list.map((s) => `hist:${s}`)),
     getCachedQuotes(list),
   ]);
-  const out = new Map<string, Map<string, number>>();
+  const out = Object.assign(new Map<string, Map<string, number>>(), { splits: new Map<string, Split[]>() });
   for (const [s, rows] of hist) {
     const q = quotes.get(s);
     const latest = q && q.price > 0 ? { date: isoOf(q.fetched_at), close: q.price } : undefined;
-    const splits = parseMeta(metas.get(`hist:${s}`))?.splits ?? [];
-    out.set(s, new Map(splitAdjusted(rows, s, splits, latest).map((r) => [r.date, r.close])));
+    const adj = splitAdjusted(rows, s, parseMeta(metas.get(`hist:${s}`))?.splits ?? [], latest);
+    out.set(s, new Map(adj.rows.map((r) => [r.date, r.close])));
+    out.splits.set(s, adj.splits);
   }
   return out;
 }
