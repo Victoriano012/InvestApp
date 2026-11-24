@@ -3,14 +3,16 @@
 import Link from "next/link";
 import { useDark, useJson, useMobile, useValueMode } from "./hooks";
 import ModeToggle from "./ModeToggle";
-import { fmtDate, fmtEUR, fmtMoney, fmtNum, fmtPct, fmtSignedEUR } from "@/lib/format";
+import { fmtDate, fmtEUR, fmtMoney, fmtNum, fmtPct, fmtSignedEUR, soldOut } from "@/lib/format";
 import { categoryColor } from "@/lib/palette";
 import { assetLabel, CATEGORY_LABEL, type BasketComponent, type PortfolioSummary, type Txn } from "@/lib/types";
 
 function D({ v, money }: { v: number | null | undefined; money?: boolean }) {
   if (v == null || !isFinite(v)) return <span className="text-muted">—</span>;
-  const cls = v > 0 ? "text-up" : v < 0 ? "text-down" : "text-ink2";
-  return <span className={cls}>{money ? fmtSignedEUR(v) : fmtPct(v)}</span>;
+  // Color by the displayed (rounded) sign: +0.001 € shows "0.00 €", not green.
+  const s = money ? fmtSignedEUR(v) : fmtPct(v);
+  const cls = s.startsWith("+") ? "text-up" : s.startsWith("-") ? "text-down" : "text-ink2";
+  return <span className={cls}>{s}</span>;
 }
 
 export default function AssetDetail({ id }: { id: number }) {
@@ -84,12 +86,15 @@ export default function AssetDetail({ id }: { id: number }) {
               <tbody>
                 {h.lots.map((lot) => {
                   const short = lot.stats.days < 30;
+                  const sold = soldOut(lot);
+                  // FIFO float residue (1e-15 left, or 1e-15 taken) counts as all/none sold.
+                  const partial = !sold && lot.quantity - lot.remaining > lot.quantity * 1e-9;
                   return (
-                    <tr key={lot.txnId} className={`border-b border-line/60 last:border-0 ${lot.remaining === 0 ? "opacity-50" : ""}`}>
-                      <td className="px-3 py-2">{fmtDate(lot.date)}{lot.remaining === 0 && <span className="ml-1.5 text-xs text-muted">(sold)</span>}</td>
+                    <tr key={lot.txnId} className={`border-b border-line/60 last:border-0 ${sold ? "opacity-50" : ""}`}>
+                      <td className="px-3 py-2">{fmtDate(lot.date)}{sold && <span className="ml-1.5 text-xs text-muted">(sold)</span>}</td>
                       <td className="tnum px-3 py-2 text-right">
-                        {isBasket ? fmtEUR(lot.remaining) : fmtNum(lot.remaining)}
-                        {lot.remaining !== lot.quantity && (
+                        {isBasket ? fmtEUR(sold ? 0 : lot.remaining) : fmtNum(sold ? 0 : lot.remaining)}
+                        {(sold || partial) && (
                           <span className="text-xs text-muted"> / {isBasket ? fmtEUR(lot.quantity) : fmtNum(lot.quantity)}</span>
                         )}
                       </td>

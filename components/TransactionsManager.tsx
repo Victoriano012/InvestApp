@@ -399,12 +399,29 @@ export default function TransactionsManager() {
       setMsg("Waiting for that day's exchange rate — try again in a second.");
       return;
     }
+    // The fields must actually be in the currency the picker shows; otherwise
+    // (no FX rate for that day) a USD amount would be stored as EUR.
+    if (editCur.total !== selectedCurrency || editCur.ppu !== selectedCurrency) {
+      setMsg(ctx
+        ? `No ${selectedCurrency} exchange rate for ${form.date} — enter the amounts in ${assetCur}.`
+        : "Waiting for that day's exchange rate — try again in a second.");
+      return;
+    }
+    // Catch unit/currency slips (pence vs pounds, a wrong FX leg) before saving.
+    const price = Number(form.price) * back;
+    const market = selAsset?.kind === "basket" ? (form.type === "sell" ? ctx?.unitValue : null) : ctx?.price;
+    if (
+      market && ctxKey.current === `${form.asset_id}:${form.date}` &&
+      Math.abs(price / market - 1) > 0.2 &&
+      !confirm(`Price ${fmtMoney(price, assetCur)} is ${Math.round(Math.abs(price / market - 1) * 100)}% away from that day's close (${fmtMoney(market, assetCur)}). Save anyway?`)
+    )
+      return;
     const body: Record<string, unknown> = {
       asset_id: form.asset_id,
       type: form.type,
       date: form.date,
       quantity: Number(form.quantity),
-      price: Number(form.price) * back,
+      price,
       fees: form.fees ? Number(form.fees) * back : 0,
       note: form.note || null,
       paid_amount: totalRaw ? Number(totalRaw) : null,
@@ -431,7 +448,8 @@ export default function TransactionsManager() {
 
   const remove = async (id: number) => {
     if (!confirm("Delete this transaction?")) return;
-    await fetch(`/api/transactions/${id}`, { method: "DELETE" });
+    const res = await fetch(`/api/transactions/${id}`, { method: "DELETE" });
+    if (!res.ok) alert((await res.json().catch(() => null))?.error || "Failed to delete.");
     reloadTxns();
   };
 
@@ -496,10 +514,6 @@ export default function TransactionsManager() {
 
   const pickAsset = (id: number | "") => {
     const a = id === "" ? undefined : assetById.get(id);
-    if (form.id) {
-      set({ asset_id: id });
-      return;
-    }
     const currency = a?.currency ?? "EUR";
     autoPriceKey.current = null;
     currencyChanged.current = false;
@@ -547,8 +561,10 @@ export default function TransactionsManager() {
           <label className="col-span-2 block text-xs md:col-span-2">
             <span className="text-muted">Asset</span>
             <select
-              className="mt-1 w-full rounded-md border border-line bg-surface px-2 py-2 text-sm"
+              className="mt-1 w-full rounded-md border border-line bg-surface px-2 py-2 text-sm disabled:opacity-60"
               value={form.asset_id}
+              disabled={form.id != null}
+              title={form.id != null ? "To move a transaction to another asset, delete it and add it again" : undefined}
               onChange={(e) => pickAsset(e.target.value ? Number(e.target.value) : "")}
             >
               <option value="">Choose…</option>
@@ -656,7 +672,7 @@ export default function TransactionsManager() {
             </button>
           )}
           {form.id && (
-            <button onClick={() => setForm(emptyForm())} className="rounded-md border border-line px-3 py-2 text-sm text-ink2">
+            <button onClick={clearForm} className="rounded-md border border-line px-3 py-2 text-sm text-ink2">
               Cancel
             </button>
           )}

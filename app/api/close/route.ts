@@ -1,18 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { currentUserId } from "@/auth";
-import { getAsset, getHistory } from "@/lib/db";
-import { ensureAllHistory, FX_SYMBOL, GBP_FX_SYMBOL, splitAdjusted } from "@/lib/market";
+import { getAsset } from "@/lib/db";
+import { ensureAllHistory, FX_SYMBOL, GBP_FX_SYMBOL, historiesMap } from "@/lib/market";
 import { basketUnitValueOn } from "@/lib/portfolio";
 import { addDays } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-/** Last known close of `symbol` on or before `date` (from the cached history). */
+/**
+ * Last known close of `symbol` on or before `date` (from the cached history);
+ * null when none falls within 10 days (a failed sync must not hand the form
+ * a weeks-old price or FX rate to size the quantity with).
+ */
 async function closeOnOrBefore(symbol: string, date: string): Promise<number | null> {
-  const rows = splitAdjusted(await getHistory(symbol));
+  const hist = (await historiesMap([symbol])).get(symbol) ?? new Map<string, number>();
+  const rows = [...hist].map(([date, close]) => ({ date, close }));
+  const oldest = addDays(date, -10);
   for (let i = rows.length - 1; i >= 0; i--) {
-    if (rows[i].date <= date) return rows[i].close;
+    if (rows[i].date <= date) return rows[i].date >= oldest && rows[i].close > 0 ? rows[i].close : null;
   }
   return null;
 }
@@ -31,7 +37,9 @@ export async function GET(req: NextRequest) {
   if (uid == null) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const assetId = Number(req.nextUrl.searchParams.get("asset"));
   const date = req.nextUrl.searchParams.get("date") ?? "";
-  if (!assetId || !/^\d{4}-\d{2}-\d{2}$/.test(date))
+  // Floor at 1970: a date input mid-typing sends years like 0002, which made
+  // the history sync refetch every symbol from year 2 onwards.
+  if (!assetId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || date < "1970-01-01")
     return NextResponse.json({ error: "asset and date (YYYY-MM-DD) required" }, { status: 400 });
   const asset = await getAsset(uid, assetId);
   if (!asset) return NextResponse.json({ error: "unknown asset" }, { status: 404 });

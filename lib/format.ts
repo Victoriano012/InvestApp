@@ -25,9 +25,21 @@ function euroAfter(fmt: Intl.NumberFormat, v: number): string {
   return `${num}\u00A0€`;
 }
 
+/** Round to `d` decimals; `+ 0` turns -0 into 0 so a rounded-away sign never shows ("-0.00 €"). */
+function round(v: number, d: number): number {
+  return Number(v.toFixed(d)) + 0;
+}
+
+/** Decimals for a unit price/quantity: at least `d`, more for tiny values so they keep 2 significant digits. */
+function priceDigits(v: number, d: number): number {
+  const a = Math.abs(v);
+  return a > 0 && a < 1 ? Math.min(Math.max(d, 1 - Math.floor(Math.log10(a))), 10) : d;
+}
+
 export function fmtEUR(v: number | null | undefined, compact = false): string {
   if (v == null || !isFinite(v)) return "—";
-  return euroAfter(compact && Math.abs(v) >= 1000 ? eurFmt0 : eurFmt, v);
+  const whole = compact && Math.abs(v) >= 1000;
+  return euroAfter(whole ? eurFmt0 : eurFmt, round(v, whole ? 0 : 2));
 }
 
 /** Compact axis tick: 0, 950, 10k, 14.5k, 1.2M — no symbol, no trailing zeros. */
@@ -44,34 +56,47 @@ export function fmtCompact(v: number | null | undefined): string {
 
 export function fmtSignedEUR(v: number | null | undefined): string {
   if (v == null || !isFinite(v)) return "—";
-  return (v > 0 ? "+" : "") + euroAfter(eurFmt, v);
+  const r = round(v, 2);
+  return (r > 0 ? "+" : "") + euroAfter(eurFmt, r);
 }
 
-/** v is a ratio: 0.12 -> "+12%", 0.125 -> "+12.5%" — never a trailing ".0". */
+/**
+ * v is a ratio: 0.12 -> "+12%", 0.125 -> "+12.5%" — never a trailing ".0".
+ * The sign follows the rounded value: 0.0004 -> "0%", not "+0%".
+ */
 export function fmtPct(v: number | null | undefined, signed = true, digits = 1): string {
   if (v == null || !isFinite(v)) return "—";
-  const s = String(Number((v * 100).toFixed(digits))) + "%";
-  return signed && v > 0 ? "+" + s : s;
+  const r = round(v * 100, digits);
+  const s = new Intl.NumberFormat("en-IE", { maximumFractionDigits: digits }).format(r) + "%";
+  return signed && r > 0 ? "+" + s : s;
 }
 
 export function fmtNum(v: number | null | undefined, maxDigits = 4): string {
   if (v == null || !isFinite(v)) return "—";
-  return new Intl.NumberFormat("en-IE", { maximumFractionDigits: maxDigits }).format(v);
+  const d = priceDigits(v, maxDigits);
+  return new Intl.NumberFormat("en-IE", { maximumFractionDigits: d }).format(round(v, d));
 }
 
 export function fmtMoney(v: number | null | undefined, currency: string): string {
   if (v == null || !isFinite(v)) return "—";
+  const d = priceDigits(v, 2);
+  v = round(v, d);
   try {
     const fmt = new Intl.NumberFormat("en-IE", {
       style: "currency",
       currency,
       currencyDisplay: "narrowSymbol",
-      maximumFractionDigits: 2,
+      maximumFractionDigits: d,
     });
     return currency === "EUR" ? euroAfter(fmt, v) : fmt.format(v);
   } catch {
-    return `${fmtNum(v, 2)} ${currency}`;
+    return `${fmtNum(v, d)} ${currency}`;
   }
+}
+
+/** A lot whose remaining quantity is only FIFO float residue counts as fully sold. */
+export function soldOut(lot: { quantity: number; remaining: number }): boolean {
+  return lot.remaining <= lot.quantity * 1e-9;
 }
 
 export function fmtDate(d: string | null | undefined): string {

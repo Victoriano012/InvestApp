@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { useDark, useJson, useMobile, useValueMode } from "./hooks";
 import ModeToggle from "./ModeToggle";
-import { fmtDate, fmtDayShort, fmtEUR, fmtPct, fmtSignedEUR } from "@/lib/format";
+import { fmtDate, fmtDayShort, fmtEUR, fmtPct, fmtSignedEUR, soldOut } from "@/lib/format";
 import { categoryColor } from "@/lib/palette";
 import { assetLabel, CATEGORIES, CATEGORY_LABEL, type Holding, type PortfolioSummary, type ReturnStats } from "@/lib/types";
 
@@ -21,10 +21,14 @@ type SortKey = (typeof SORT_OPTIONS)[number]["key"];
 
 const CAT_ORDER = new Map(CATEGORIES.map((c, i) => [c.key, i]));
 
+const annualOrNull = (s: ReturnStats | null) => (s && s.days >= 30 ? s.annualPct : null);
+
 function Delta({ v, money }: { v: number | null | undefined; money?: boolean }) {
   if (v == null || !isFinite(v)) return <span className="text-muted">—</span>;
-  const cls = v > 0 ? "text-up" : v < 0 ? "text-down" : "text-ink2";
-  return <span className={cls}>{money ? fmtSignedEUR(v) : fmtPct(v)}</span>;
+  // Color by the displayed (rounded) sign: +0.001 € shows "0.00 €", not green.
+  const s = money ? fmtSignedEUR(v) : fmtPct(v);
+  const cls = s.startsWith("+") ? "text-up" : s.startsWith("-") ? "text-down" : "text-ink2";
+  return <span className={cls}>{s}</span>;
 }
 
 /** Annualized rate cell; short holding periods are flagged instead of extrapolated. */
@@ -39,7 +43,7 @@ function Annual({ s, date }: { s: ReturnStats | null; date?: string | null }) {
   if (s.days < 30)
     return (
       <>
-        <span className="text-muted" title={`Ann. return: ${fmtPct(s.annualPct)}`}>{fmtPct(s.totalPct)}</span>
+        <span className="text-muted" title="Held under 30 days — total return shown, not annualized">{fmtPct(s.totalPct)}</span>
         {when}
       </>
     );
@@ -101,10 +105,11 @@ export default function PortfolioView() {
           return h.costEUR;
         case "gain":
           return pctMode ? (h.unrealizedPct ?? -Infinity) : h.unrealizedEUR;
+        // Under 30 days the rate isn't shown, so it can't rank either.
         case "first":
-          return h.sinceFirstBuy?.annualPct ?? -Infinity;
+          return annualOrNull(h.sinceFirstBuy) ?? -Infinity;
         case "last":
-          return h.sinceLastBuy?.annualPct ?? -Infinity;
+          return annualOrNull(h.sinceLastBuy) ?? -Infinity;
       }
     };
     const arr = [...held].sort((a, b) => val(a) - val(b));
@@ -248,7 +253,7 @@ function Tile({ label, value, tone, sub, className = "" }: { label: string; valu
 
 function AssetLabel({ h, dark, plain }: { h: Holding; dark: boolean; plain?: boolean }) {
   const mobile = useMobile();
-  const lots = h.txnCount > 1 ? `${h.lots.filter((l) => l.remaining > 0).length} lots` : null;
+  const lots = h.txnCount > 1 ? `${h.lots.filter((l) => !soldOut(l)).length} lots` : null;
   return (
     <div className="flex items-center gap-2.5">
       <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: categoryColor(h.asset.category, dark) }} />
