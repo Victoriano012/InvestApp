@@ -188,6 +188,7 @@ interface TxnForm {
   note: string;
   paidAmount: string; // money paid/received (edit mode)
   paidCurrency: string; // display currency (edit mode)
+  amountEUR: string; // exact EUR paid/received, non-EUR assets (edit mode)
 }
 
 const emptyForm = (assetId: number | "" = "", currency = "EUR"): TxnForm => ({
@@ -203,6 +204,7 @@ const emptyForm = (assetId: number | "" = "", currency = "EUR"): TxnForm => ({
   note: "",
   paidAmount: "",
   paidCurrency: currency,
+  amountEUR: "",
 });
 
 /** Factor converting an amount in `from` to `to`, via that day's per-EUR rates. */
@@ -426,6 +428,10 @@ export default function TransactionsManager() {
       note: form.note || null,
       paid_amount: totalRaw ? Number(totalRaw) : null,
       paid_currency: totalRaw ? editCur.total : null,
+      // Exact euros: typed in edit mode, or the EUR total entered for a non-EUR asset.
+      amount_eur: form.id
+        ? form.amountEUR || null
+        : assetCur !== "EUR" && editCur.total === "EUR" ? Number(totalRaw) : null,
     };
     setBusy(true);
     const res = await fetch(form.id ? `/api/transactions/${form.id}` : "/api/transactions", {
@@ -477,6 +483,7 @@ export default function TransactionsManager() {
           ? String(t.paid_amount)
           : numStr(t.quantity * t.price + (t.type === "buy" ? 1 : -1) * t.fees),
       paidCurrency: t.paid_currency ?? assetCur,
+      amountEUR: t.amount_eur != null ? String(t.amount_eur) : "",
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -647,6 +654,17 @@ export default function TransactionsManager() {
               />
             </label>
           </div>
+          {form.id && selAsset && selAsset.currency !== "EUR" && (
+            <label className="block text-xs" title="Exact euros from your bank statement, incl. fees; replaces the FX estimate">
+              <span className="text-muted">{form.type === "buy" ? "EUR paid" : "EUR received"}</span>
+              <input
+                type="number" step="any" min="0" inputMode="decimal" placeholder="optional"
+                className="no-spinner mt-1 w-full rounded-md border border-line bg-surface px-2 py-2 text-sm"
+                value={form.amountEUR}
+                onChange={(e) => set({ amountEUR: e.target.value })}
+              />
+            </label>
+          )}
           <label className="col-span-2 block text-xs md:col-span-2">
             <span className="text-muted">Note</span>
             <input

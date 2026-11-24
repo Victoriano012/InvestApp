@@ -61,6 +61,9 @@ export interface Txn {
   // entered — display metadata only, never used in portfolio math.
   paid_amount: number | null;
   paid_currency: string | null;
+  // Exact EUR paid (buy, incl. fees) / received (sell, net of fees) for a
+  // non-EUR asset; when set, the portfolio math uses it instead of FX.
+  amount_eur?: number | null;
 }
 
 export interface ReturnStats {

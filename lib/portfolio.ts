@@ -178,7 +178,18 @@ interface Timeline {
   lots: OpenLot[]; // final state (remaining may be 0)
 }
 
-/** Walk the axis applying transactions FIFO; fx converts native->EUR at each txn date. */
+/**
+ * EUR paid (buy, incl. fees) or received (sell, net of fees): the recorded
+ * amount when known, else converted at the txn-date FX rate.
+ */
+function txnEUR(t: Txn, currency: string, fx: FxLookup): number {
+  if (t.amount_eur != null) return t.amount_eur;
+  const gross = t.quantity * t.price;
+  const native = t.type === "buy" ? gross + (t.fees || 0) : gross - (t.fees || 0);
+  return native * (eurFactor(currency, fx.at(t.date)) ?? 0);
+}
+
+/** Walk the axis applying transactions FIFO, at each txn's EUR amount. */
 function computeTimeline(
   txns: Txn[],
   axis: string[],
@@ -202,19 +213,17 @@ function computeTimeline(
     const todays = byDate.get(axis[i]);
     if (todays) {
       for (const t of buysFirst(todays)) {
-        const f = eurFactor(currency, fx.at(t.date)) ?? 0;
+        const unitEUR = txnEUR(t, currency, fx) / t.quantity;
         if (t.type === "buy") {
-          const unitCostEUR = (t.price + (t.fees || 0) / t.quantity) * f;
           lots.push({
             txnId: t.id,
             date: t.date,
             quantity: t.quantity,
             remaining: t.quantity,
             priceNative: t.price,
-            unitCostEUR,
+            unitCostEUR: unitEUR,
           });
         } else {
-          const unitProceedsEUR = (t.price - (t.fees || 0) / t.quantity) * f;
           let toSell = t.quantity;
           for (const lot of lots) {
             if (toSell <= 0) break;
@@ -223,7 +232,7 @@ function computeTimeline(
             lot.remaining -= take;
             if (lot.remaining < lot.quantity * DUST) lot.remaining = 0;
             toSell -= take;
-            realized += take * (unitProceedsEUR - lot.unitCostEUR);
+            realized += take * (unitEUR - lot.unitCostEUR);
           }
           // Any oversell beyond held quantity is ignored.
         }
@@ -253,9 +262,7 @@ function cumulativeContributions(
   const byDate = new Map<string, number>();
   for (const t of txns) {
     if (t.type !== "buy") continue;
-    const f = eurFactor(currency, fx.at(t.date)) ?? 0;
-    const paid = (t.quantity * t.price + (t.fees || 0)) * f;
-    byDate.set(t.date, (byDate.get(t.date) ?? 0) + paid);
+    byDate.set(t.date, (byDate.get(t.date) ?? 0) + txnEUR(t, currency, fx));
   }
   let total = 0;
   return axis.map((date) => {
@@ -868,9 +875,7 @@ export async function getCapitalData(uid: number, fresh = false): Promise<Capita
   for (const t of txns) {
     const asset = assetById.get(t.asset_id);
     if (!asset) continue;
-    const f = eurFactor(asset.currency, fx.at(t.date)) ?? 0;
-    const gross = t.quantity * t.price;
-    const amountEUR = (t.type === "buy" ? gross + (t.fees || 0) : gross - (t.fees || 0)) * f;
+    const amountEUR = txnEUR(t, asset.currency, fx);
     if (!byDate.has(t.date)) byDate.set(t.date, []);
     byDate.get(t.date)!.push({
       id: t.id,

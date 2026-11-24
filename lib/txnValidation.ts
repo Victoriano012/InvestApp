@@ -56,6 +56,12 @@ export function checkTxn(b: Record<string, unknown>, asset: Asset): TxnInput | s
     }
   }
 
+  let amount_eur: number | null = null;
+  if (b.amount_eur != null && b.amount_eur !== "" && asset.currency !== "EUR") {
+    amount_eur = num(b.amount_eur);
+    if (!(amount_eur > 0 && isFinite(amount_eur))) return "amount_eur must be a number > 0";
+  }
+
   return {
     asset_id: asset.id,
     type: b.type,
@@ -66,6 +72,7 @@ export function checkTxn(b: Record<string, unknown>, asset: Asset): TxnInput | s
     note: typeof b.note === "string" && b.note.trim() ? b.note.trim() : null,
     paid_amount,
     paid_currency,
+    amount_eur,
   };
 }
 
