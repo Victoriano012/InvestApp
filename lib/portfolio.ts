@@ -71,12 +71,22 @@ type Hist = Map<string, Map<string, number>>;
 
 const histOf = (hist: Hist, symbol: string) => hist.get(symbol) ?? new Map<string, number>();
 
-function buildFx(from: string, to: string, hist: Hist): FxLookup {
+function buildFx(from: string, to: string, hist: Hist, fallback: number | null = null): FxLookup {
   const axis = buildAxis(from, to);
-  const filled = ffill(axis, histOf(hist, FX_SYMBOL));
+  const rates = new Map(histOf(hist, FX_SYMBOL));
+  // Start from the last rate before the axis (weekend first txn), so a txn's
+  // FX doesn't depend on where each caller's axis begins.
+  let before: number | undefined;
+  for (const [d, r] of rates) {
+    if (d >= from) break;
+    before = r;
+  }
+  if (before != null && !rates.has(from)) rates.set(from, before);
+  const filled = ffill(axis, rates);
   const index = new Map(axis.map((d, i) => [d, i]));
-  // Backfill the leading gap with the first known rate so early txns still convert.
-  const firstKnown = filled.find((v) => v != null) ?? null;
+  // Backfill the leading gap with the first known rate so early txns still
+  // convert; with no FX history at all, the live quote (if any).
+  const firstKnown = filled.find((v) => v != null) ?? fallback;
   const usdPerEur = filled.map((v) => v ?? firstKnown);
   return {
     axis,
@@ -100,7 +110,11 @@ function toHistoryBasis(txns: Txn[], closes: Map<string, number>): Txn[] {
   return txns.map((t) => {
     let close: number | undefined;
     for (const [d, c] of closes) {
-      if (d > t.date) break;
+      // Txn before the cached history (e.g. a weekend buy): next close, if within a week.
+      if (d > t.date) {
+        if (close == null && d <= addDays(t.date, 7)) close = c;
+        break;
+      }
       close = c;
     }
     const n = close ? splitRatio(t.price / close) : 1;
@@ -108,7 +122,32 @@ function toHistoryBasis(txns: Txn[], closes: Map<string, number>): Txn[] {
   });
 }
 
+const lastValue = (m: Map<string, number>): number | null => {
+  let v: number | null = null;
+  for (const x of m.values()) v = x;
+  return v;
+};
+
+/**
+ * Put today's quotes (fetched today) on top of the cached closes, so the
+ * charts' last point uses the same price as the holdings page (getPortfolio).
+ */
+async function withTodayQuotes(hist: Hist, symbols: string[], today: string): Promise<void> {
+  const quotes = await getCachedQuotes(symbols);
+  for (const [s, q] of quotes) {
+    if (new Date(q.fetched_at).toISOString().slice(0, 10) !== today) continue;
+    if (!hist.has(s)) hist.set(s, new Map());
+    hist.get(s)!.set(today, q.price);
+  }
+}
+
 // ---------- FIFO timeline ----------
+
+/** Same-day buys before sells, so a sell entered first still finds the shares. */
+const buysFirst = (ts: Txn[]) => [...ts].sort((a, b) => (a.type === b.type ? 0 : a.type === "buy" ? -1 : 1));
+
+/** Remaining below this fraction of the lot is float dust from a full sell. */
+const DUST = 1e-9;
 
 interface OpenLot {
   txnId: number;
@@ -149,7 +188,7 @@ function computeTimeline(
   for (let i = 0; i < axis.length; i++) {
     const todays = byDate.get(axis[i]);
     if (todays) {
-      for (const t of todays) {
+      for (const t of buysFirst(todays)) {
         const f = eurFactor(currency, fx.at(t.date)) ?? 0;
         if (t.type === "buy") {
           const unitCostEUR = (t.price + (t.fees || 0) / t.quantity) * f;
@@ -161,8 +200,6 @@ function computeTimeline(
             priceNative: t.price,
             unitCostEUR,
           });
-          q += t.quantity;
-          cost += t.quantity * unitCostEUR;
         } else {
           const unitProceedsEUR = (t.price - (t.fees || 0) / t.quantity) * f;
           let toSell = t.quantity;
@@ -171,13 +208,19 @@ function computeTimeline(
             if (lot.remaining <= 0) continue;
             const take = Math.min(lot.remaining, toSell);
             lot.remaining -= take;
+            if (lot.remaining < lot.quantity * DUST) lot.remaining = 0;
             toSell -= take;
-            q -= take;
-            cost -= take * lot.unitCostEUR;
             realized += take * (unitProceedsEUR - lot.unitCostEUR);
           }
           // Any oversell beyond held quantity is ignored.
         }
+      }
+      // From the lots, not running sums: a closed position is exactly 0/0.
+      q = 0;
+      cost = 0;
+      for (const lot of lots) {
+        q += lot.remaining;
+        cost += lot.remaining * lot.unitCostEUR;
       }
     }
     qty[i] = q;
@@ -221,6 +264,7 @@ interface BasketLot {
   remaining: number;
   unitCostEUR: number; // 1 + fees/units
   compQty: number[]; // shares of each component bought with these units
+  buyPx: (number | null)[]; // EUR price each component was bought at
 }
 
 interface BasketTimeline {
@@ -280,17 +324,21 @@ function computeBasketTimeline(
   for (let i = 0; i < axis.length; i++) {
     const todays = byDate.get(axis[i]);
     if (todays) {
-      for (const t of todays) {
+      for (const t of buysFirst(todays)) {
         if (t.type === "buy") {
           const amount = t.quantity * t.price; // EUR (price is 1 by convention)
           const unitCostEUR = t.price + (t.fees || 0) / t.quantity;
+          // Buy-day price per component; a buy before its first close (weekend
+          // buy at the start of the history) takes the next close within a week.
+          const px = compPricesEUR.map((cp) => {
+            for (let k = i; k < Math.min(i + 8, axis.length); k++) if (cp[k] != null && cp[k]! > 0) return cp[k]!;
+            return null;
+          });
           const avail: number[] = [];
-          for (let j = 0; j < n; j++) if (compPricesEUR[j][i] != null) avail.push(j);
+          for (let j = 0; j < n; j++) if (px[j] != null) avail.push(j);
           const compQty = new Array<number>(n).fill(0);
-          for (const j of avail) compQty[j] = amount / avail.length / compPricesEUR[j][i]!;
-          lots.push({ txnId: t.id, date: t.date, units: t.quantity, remaining: t.quantity, unitCostEUR, compQty });
-          u += t.quantity;
-          cost += t.quantity * unitCostEUR;
+          for (const j of avail) compQty[j] = amount / avail.length / px[j]!;
+          lots.push({ txnId: t.id, date: t.date, units: t.quantity, remaining: t.quantity, unitCostEUR, compQty, buyPx: px });
         } else {
           const unitProceedsEUR = t.price - (t.fees || 0) / t.quantity;
           let toSell = t.quantity;
@@ -299,12 +347,17 @@ function computeBasketTimeline(
             if (lot.remaining <= 0) continue;
             const take = Math.min(lot.remaining, toSell);
             lot.remaining -= take;
+            if (lot.remaining < lot.units * DUST) lot.remaining = 0;
             toSell -= take;
-            u -= take;
-            cost -= take * lot.unitCostEUR;
             realized += take * (unitProceedsEUR - lot.unitCostEUR);
           }
         }
+      }
+      u = 0;
+      cost = 0;
+      for (const lot of lots) {
+        u += lot.remaining;
+        cost += lot.remaining * lot.unitCostEUR;
       }
     }
     units[i] = u;
@@ -315,7 +368,8 @@ function computeBasketTimeline(
       if (lot.remaining <= 0) continue;
       let full = 0;
       for (let j = 0; j < n; j++) {
-        const p = compPricesEUR[j][i];
+        // Before a component's first close, it's still worth what was paid.
+        const p = compPricesEUR[j][i] ?? lot.buyPx[j];
         if (p != null) full += lot.compQty[j] * p;
       }
       v += (lot.remaining / lot.units) * full;
@@ -460,7 +514,7 @@ export async function getPortfolio(uid: number, fresh = false): Promise<Portfoli
   // Component currencies straight from the fresh quotes (fall back to USD).
   const curOf = new Map(compSymbols.map((s) => [s, quotes.get(s)?.currency ?? "USD"]));
 
-  const fx = buildFx(minDate, today, hist);
+  const fx = buildFx(minDate, today, hist, quotes.get(FX_SYMBOL)?.price ?? null);
   const fxNow = quotes.get(FX_SYMBOL)?.price ?? fx.at(today);
 
   const holdings: Holding[] = [];
@@ -479,8 +533,8 @@ export async function getPortfolio(uid: number, fresh = false): Promise<Portfoli
       continue;
     }
     const at = toHistoryBasis(txns.filter((t) => t.asset_id === asset.id), histOf(hist, asset.symbol));
-    const quote = quotes.get(asset.symbol);
-    const priceNative = quote?.price ?? null;
+    // Live quote, else the last cached close (never value a holding at 0 for a missing quote).
+    const priceNative = quotes.get(asset.symbol)?.price ?? lastValue(histOf(hist, asset.symbol));
     const f = eurFactor(asset.currency, fxNow);
     const priceEUR = priceNative != null && f != null ? priceNative * f : null;
 
@@ -577,6 +631,7 @@ export async function getExplorerData(uid: number, fresh = false): Promise<Explo
     historiesMap([...ownSymbols, ...compSymbols, FX_SYMBOL]),
     componentCurrencies(compSymbols),
   ]);
+  await withTodayQuotes(hist, [...ownSymbols, ...compSymbols, FX_SYMBOL], today);
   const axis = buildAxis(from, today);
   const fx = buildFx(from, today, hist);
   const catCounters = new Map<Category, number>();
@@ -588,19 +643,21 @@ export async function getExplorerData(uid: number, fresh = false): Promise<Explo
     if (asset.kind === "basket") {
       const comps = baskets.get(asset.id) ?? [];
       const prices = componentPricesEUR(comps, axis, fx, hist, curOf);
+      // Components with no data at all would hold the index at null forever.
+      const live = prices.filter((cp) => cp.some((p) => p != null));
       // Equal-weight index (base 100 at the first date all components trade).
       // Per-lot chart lines use this index, so they are equal-weight-at-index-
       // base rather than equal-weight-at-buy — close enough for plotting;
       // the per-buy table on the asset page is exact.
       let i0 = -1;
       for (let i = 0; i < axis.length && i0 < 0; i++) {
-        if (prices.length > 0 && prices.every((cp) => cp[i] != null)) i0 = i;
+        if (live.length > 0 && live.every((cp) => cp[i] != null && cp[i]! > 0)) i0 = i;
       }
       const priceEUR = axis.map((_, i) => {
         if (i0 < 0 || i < i0) return null;
         let s = 0;
-        for (const cp of prices) s += cp[i]! / cp[i0]!;
-        return (100 * s) / prices.length;
+        for (const cp of live) s += cp[i]! / cp[i0]!;
+        return (100 * s) / live.length;
       });
       const at = txns.filter((t) => t.asset_id === asset.id);
       const tl = at.length ? computeBasketTimeline(at, axis, prices) : null;
@@ -733,6 +790,7 @@ export async function getCapitalData(uid: number, fresh = false): Promise<Capita
     historiesMap([...tradedSymbols, ...compSymbols, FX_SYMBOL]),
     componentCurrencies(compSymbols),
   ]);
+  await withTodayQuotes(hist, [...tradedSymbols, ...compSymbols, FX_SYMBOL], today);
   const axis = buildAxis(from, today);
   const fx = buildFx(from, today, hist);
 
