@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { currentUserId } from "@/auth";
-import { deleteAsset, getAsset, listTxns, updateAsset } from "@/lib/db";
+import { deleteAsset, getAsset, listTxns, parseId, updateAsset } from "@/lib/db";
 import { CATEGORIES } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -10,8 +10,8 @@ type Params = { params: Promise<{ id: string }> };
 export async function PATCH(req: NextRequest, { params }: Params) {
   const uid = await currentUserId();
   if (uid == null) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-  const { id } = await params;
-  if (!(await getAsset(uid, Number(id))))
+  const id = parseId((await params).id);
+  if (id == null || !(await getAsset(uid, id)))
     return NextResponse.json({ error: "not found" }, { status: 404 });
   const b = await req.json().catch(() => null);
   if (!b || typeof b !== "object") return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
@@ -30,19 +30,21 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   for (const k of ["name", "short_name", "category", "sort"]) {
     if (b[k] !== undefined) patch[k] = typeof b[k] === "string" ? b[k].trim() || null : b[k];
   }
-  return NextResponse.json(await updateAsset(uid, Number(id), patch));
+  return NextResponse.json(await updateAsset(uid, id, patch));
 }
 
 export async function DELETE(_req: NextRequest, { params }: Params) {
   const uid = await currentUserId();
   if (uid == null) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-  const { id } = await params;
-  const txns = await listTxns(uid, Number(id));
+  const id = parseId((await params).id);
+  if (id == null || !(await getAsset(uid, id)))
+    return NextResponse.json({ error: "not found" }, { status: 404 });
+  const txns = await listTxns(uid, id);
   if (txns.length > 0)
     return NextResponse.json(
       { error: `asset has ${txns.length} transactions; delete them first` },
       { status: 409 }
     );
-  await deleteAsset(uid, Number(id));
+  await deleteAsset(uid, id);
   return NextResponse.json({ ok: true });
 }

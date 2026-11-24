@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { currentUserId } from "@/auth";
-import { deleteTxn, getAsset, getTxn, listTxns, updateTxn } from "@/lib/db";
+import { deleteTxn, getAsset, getTxn, listTxns, parseId, updateTxn } from "@/lib/db";
 import { checkTxn, oversold } from "@/lib/txnValidation";
 
 export const dynamic = "force-dynamic";
@@ -10,8 +10,8 @@ type Params = { params: Promise<{ id: string }> };
 export async function PATCH(req: NextRequest, { params }: Params) {
   const uid = await currentUserId();
   if (uid == null) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-  const { id } = await params;
-  const cur = await getTxn(uid, Number(id));
+  const id = parseId((await params).id);
+  const cur = id == null ? undefined : await getTxn(uid, id);
   if (!cur) return NextResponse.json({ error: "not found" }, { status: 404 });
   const b = await req.json().catch(() => null);
   if (!b || typeof b !== "object") return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
@@ -36,8 +36,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 export async function DELETE(_req: NextRequest, { params }: Params) {
   const uid = await currentUserId();
   if (uid == null) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-  const { id } = await params;
-  const cur = await getTxn(uid, Number(id));
+  const id = parseId((await params).id);
+  const cur = id == null ? undefined : await getTxn(uid, id);
   if (!cur) return NextResponse.json({ error: "not found" }, { status: 404 });
   if (cur.type === "buy") {
     const over = oversold((await listTxns(uid, cur.asset_id)).filter((t) => t.id !== cur.id));

@@ -122,6 +122,11 @@ export async function listAssets(uid: number): Promise<Asset[]> {
   return rows.map((r) => rowToAsset(uid, r));
 }
 
+/** A URL id segment as a SERIAL id, or null when it can't be one (-> 404). */
+export function parseId(s: string): number | null {
+  return /^\d{1,9}$/.test(s) ? Number(s) : null;
+}
+
 export async function getAsset(uid: number, id: number): Promise<Asset | undefined> {
   const r = await one<AssetRow>(
     "SELECT id, sort, enc FROM assets WHERE user_id = $1 AND id = $2",
