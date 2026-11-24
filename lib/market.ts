@@ -9,7 +9,7 @@ import {
   upsertHistory,
   type CachedQuote,
 } from "./db";
-import { daysBetween, todayISO } from "./format";
+import { addDays, daysBetween, todayISO } from "./format";
 
 const yf = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 
@@ -17,7 +17,9 @@ const QUOTE_TTL_MS = 5 * 60 * 1000;
 const HISTORY_TTL_MS = 60 * 60 * 1000;
 
 export const FX_SYMBOL = "EURUSD=X"; // USD per 1 EUR
-export const GBP_FX_SYMBOL = "EURGBP=X"; // GBP per 1 EUR (money-based entry only)
+export const GBP_FX_SYMBOL = "EURGBP=X"; // GBP per 1 EUR (payment currency only)
+/** FX histories always synced alongside asset histories. */
+export const FX_SYMBOLS = [FX_SYMBOL, GBP_FX_SYMBOL];
 
 /** Yahoo quotes some exchanges in minor units (LSE pence, JSE cents, TASE agorot). */
 const MINOR_UNITS: Record<string, string> = { GBp: "GBP", GBX: "GBP", ZAc: "ZAR", ILA: "ILS" };
@@ -130,7 +132,7 @@ export async function ensureAllHistory(
   fromDate: string,
   cacheOnly = false
 ): Promise<boolean> {
-  const list = [...new Set([...symbols, FX_SYMBOL])];
+  const list = [...new Set([...symbols, ...FX_SYMBOLS])];
   const now = Date.now();
   const metas = await getMetaMany(list.map((s) => `hist:${s}`));
   let skipped = false;
@@ -140,7 +142,9 @@ export async function ensureAllHistory(
       const m = parseMeta(metas.get(`hist:${symbol}`));
       const from = m?.from ?? null;
       const syncedAt = m?.syncedAt ?? 0;
-      if (from !== null && from <= fromDate) {
+      // FX starts a week early so a weekend/holiday first txn has a last known rate.
+      const need = FX_SYMBOLS.includes(symbol) ? addDays(fromDate, -7) : fromDate;
+      if (from !== null && from <= need) {
         const fresh = now - syncedAt < HISTORY_TTL_MS;
         if (!fresh && cacheOnly) skipped = true;
         if (fresh || cacheOnly) return;
@@ -148,7 +152,7 @@ export async function ensureAllHistory(
 
       // Refetch the whole cached range so Yahoo's retroactive split
       // adjustments restate every row. (Floor: partial dates like 0002-…)
-      const want = from && from <= fromDate ? from : fromDate;
+      const want = from && from <= need ? from : need;
       const period1 = want < EPOCH ? EPOCH : want;
       try {
         const res = await yf.chart(symbol, { period1, interval: "1d" });

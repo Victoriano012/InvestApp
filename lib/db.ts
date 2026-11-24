@@ -295,7 +295,6 @@ function txnPayload(t: Omit<Txn, "id" | "asset_id">): TxnPayload {
     note: t.note ?? null,
     paid_amount: t.paid_amount ?? null,
     paid_currency: t.paid_currency ?? null,
-    amount_eur: t.amount_eur ?? null,
   };
 }
 

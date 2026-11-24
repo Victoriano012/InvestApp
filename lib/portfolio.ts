@@ -2,6 +2,8 @@ import { getCachedQuotes, listAssets, listBasketComponents, listTxns, type Cache
 import {
   ensureAllHistory,
   FX_SYMBOL,
+  FX_SYMBOLS,
+  GBP_FX_SYMBOL,
   getQuotes,
   historiesMap,
   type Histories,
@@ -68,10 +70,10 @@ function eurFactor(currency: string, usdPerEur: number | null): number | null {
 }
 
 interface FxLookup {
-  axis: string[];
-  index: Map<string, number>;
   usdPerEur: (number | null)[];
   at(date: string): number | null;
+  /** EUR value of 1 unit of `currency` (EUR/USD/GBP) on `date`; null if unknown. */
+  eur(currency: string, date: string): number | null;
 }
 
 /** Symbol -> (date -> close) maps, prefetched per request. */
@@ -81,7 +83,30 @@ const histOf = (hist: Hist, symbol: string) => hist.get(symbol) ?? new Map<strin
 
 function buildFx(from: string, to: string, hist: Hist, fallback: number | null = null): FxLookup {
   const axis = buildAxis(from, to);
-  const rates = new Map(histOf(hist, FX_SYMBOL));
+  const index = new Map(axis.map((d, i) => [d, i]));
+  const usd = rateSeries(axis, index, from, to, histOf(hist, FX_SYMBOL), fallback);
+  const gbp = rateSeries(axis, index, from, to, histOf(hist, GBP_FX_SYMBOL), null);
+  return {
+    usdPerEur: usd.series,
+    at: usd.at,
+    eur(currency, date) {
+      if (currency !== "GBP") return eurFactor(currency, usd.at(date));
+      const r = gbp.at(date);
+      return r && r > 0 ? 1 / r : null;
+    },
+  };
+}
+
+/** Daily per-EUR rate along the axis (last known rate on weekends/holidays), with a date lookup. */
+function rateSeries(
+  axis: string[],
+  index: Map<string, number>,
+  from: string,
+  to: string,
+  history: Map<string, number>,
+  fallback: number | null
+) {
+  const rates = new Map(history);
   // Start from the last rate before the axis (weekend first txn), so a txn's
   // FX doesn't depend on where each caller's axis begins.
   let before: number | undefined;
@@ -91,21 +116,16 @@ function buildFx(from: string, to: string, hist: Hist, fallback: number | null =
   }
   if (before != null && !rates.has(from)) rates.set(from, before);
   const filled = ffill(axis, rates);
-  const index = new Map(axis.map((d, i) => [d, i]));
   // Backfill the leading gap with the first known rate so early txns still
   // convert; with no FX history at all, the live quote (if any).
   const firstKnown = filled.find((v) => v != null) ?? fallback;
-  const usdPerEur = filled.map((v) => v ?? firstKnown);
-  return {
-    axis,
-    index,
-    usdPerEur,
-    at(date: string) {
-      const i = index.get(date);
-      if (i == null) return date > to ? usdPerEur[usdPerEur.length - 1] : firstKnown;
-      return usdPerEur[i];
-    },
+  const series = filled.map((v) => v ?? firstKnown);
+  const at = (date: string) => {
+    const i = index.get(date);
+    if (i == null) return date > to ? series[series.length - 1] : firstKnown;
+    return series[i];
   };
+  return { series, at };
 }
 
 /**
@@ -179,11 +199,13 @@ interface Timeline {
 }
 
 /**
- * EUR paid (buy, incl. fees) or received (sell, net of fees): the recorded
- * amount when known, else converted at the txn-date FX rate.
+ * EUR paid (buy, incl. fees) or received (sell, net of fees): the stored
+ * payment at its currency's txn-date rate, else the asset-currency amount at
+ * the txn-date EUR/USD rate.
  */
 function txnEUR(t: Txn, currency: string, fx: FxLookup): number {
-  if (t.amount_eur != null) return t.amount_eur;
+  const paidF = t.paid_amount != null && t.paid_currency ? fx.eur(t.paid_currency, t.date) : null;
+  if (paidF != null) return t.paid_amount! * paidF;
   const gross = t.quantity * t.price;
   const native = t.type === "buy" ? gross + (t.fees || 0) : gross - (t.fees || 0);
   return native * (eurFactor(currency, fx.at(t.date)) ?? 0);
@@ -537,7 +559,7 @@ export async function getPortfolio(uid: number, fresh = false): Promise<Portfoli
     ensureAllHistory([...symbols, ...compSymbols], minDate, cacheOnly),
     getQuotes([...symbols, ...compSymbols, FX_SYMBOL], cacheOnly),
   ]);
-  const hist = await historiesMap([...symbols, ...compSymbols, FX_SYMBOL]);
+  const hist = await historiesMap([...symbols, ...compSymbols, ...FX_SYMBOLS]);
   // Component currencies straight from the fresh quotes (fall back to USD).
   const curOf = new Map(compSymbols.map((s) => [s, quotes.get(s)?.currency ?? "USD"]));
 
@@ -652,10 +674,10 @@ export async function getExplorerData(uid: number, fresh = false): Promise<Explo
   const ownSymbols = assets.filter((a) => a.kind !== "basket").map((a) => a.symbol);
   const stale = await ensureAllHistory([...ownSymbols, ...compSymbols], from, !fresh);
   const [hist, curOf] = await Promise.all([
-    historiesMap([...ownSymbols, ...compSymbols, FX_SYMBOL]),
+    historiesMap([...ownSymbols, ...compSymbols, ...FX_SYMBOLS]),
     componentCurrencies(compSymbols),
   ]);
-  await withTodayQuotes(hist, [...ownSymbols, ...compSymbols, FX_SYMBOL], today);
+  await withTodayQuotes(hist, [...ownSymbols, ...compSymbols, ...FX_SYMBOLS], today);
   const axis = buildAxis(from, today);
   const fx = buildFx(from, today, hist);
   const catCounters = new Map<Category, number>();
@@ -813,10 +835,10 @@ export async function getCapitalData(uid: number, fresh = false): Promise<Capita
     .map((a) => a.symbol);
   const stale = await ensureAllHistory([...tradedSymbols, ...compSymbols], from, !fresh);
   const [hist, curOf] = await Promise.all([
-    historiesMap([...tradedSymbols, ...compSymbols, FX_SYMBOL]),
+    historiesMap([...tradedSymbols, ...compSymbols, ...FX_SYMBOLS]),
     componentCurrencies(compSymbols),
   ]);
-  await withTodayQuotes(hist, [...tradedSymbols, ...compSymbols, FX_SYMBOL], today);
+  await withTodayQuotes(hist, [...tradedSymbols, ...compSymbols, ...FX_SYMBOLS], today);
   const axis = buildAxis(from, today);
   const fx = buildFx(from, today, hist);
 

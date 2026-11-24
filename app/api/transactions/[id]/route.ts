@@ -21,7 +21,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       { status: 400 }
     );
   const merged: Record<string, unknown> = { ...cur };
-  for (const k of ["type", "date", "quantity", "price", "fees", "note", "paid_amount", "paid_currency", "amount_eur"]) {
+  for (const k of ["type", "date", "quantity", "price", "fees", "note", "paid_amount", "paid_currency"]) {
     if (b[k] !== undefined) merged[k] = b[k];
   }
   const asset = (await getAsset(uid, cur.asset_id))!;

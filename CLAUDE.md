@@ -59,9 +59,11 @@ Postgres.
   removal is a soft `until`, past lots keep the component.
 - **Money-based entry**: the add-transaction form takes an amount + currency
   and derives quantity from that day's close via `/api/close`
-  (`{price, currency, usdPerEur, unitValue}`); the DB stays canonical in
-  quantity/price/fees, so portfolio math is untouched. Edit mode exposes the
-  raw fields.
+  (`{price, currency, usdPerEur, gbpPerEur, unitValue}`); quantity/price/fees
+  stay in the asset currency. The amount is stored as `paid_amount` +
+  `paid_currency` (EUR/USD/GBP); when set, EUR cost/proceeds = that amount at
+  the txn-date rate (`EURUSD=X`/`EURGBP=X`, last known on weekends), else
+  asset-currency amount × EUR/USD. Edit mode exposes the raw fields.
 - No daily-change ("Today") numbers anywhere — Victor explicitly doesn't
   want them.
 

@@ -45,8 +45,8 @@ export function checkTxn(b: Record<string, unknown>, asset: Asset): TxnInput | s
   if (b.paid_amount != null && b.paid_amount !== "") {
     paid_amount = num(b.paid_amount);
     if (!(paid_amount > 0 && isFinite(paid_amount))) return "paid_amount must be a number > 0";
-    if (typeof b.paid_currency !== "string" || !/^[A-Z]{3}$/.test(b.paid_currency))
-      return "paid_currency must be a 3-letter currency code";
+    if (b.paid_currency !== "EUR" && b.paid_currency !== "USD" && b.paid_currency !== "GBP")
+      return "paid_currency must be EUR, USD or GBP";
     paid_currency = b.paid_currency;
     // Same currency as the asset: the total must match quantity × price ± fees.
     if (paid_currency === asset.currency) {
@@ -54,12 +54,6 @@ export function checkTxn(b: Record<string, unknown>, asset: Asset): TxnInput | s
       if (Math.abs(expected - paid_amount) > 0.005 * paid_amount + 0.01)
         return `total ${fmtNum(paid_amount, 2)} doesn't match quantity × price ${b.type === "buy" ? "+" : "−"} fees (${fmtNum(expected, 2)})`;
     }
-  }
-
-  let amount_eur: number | null = null;
-  if (b.amount_eur != null && b.amount_eur !== "" && asset.currency !== "EUR") {
-    amount_eur = num(b.amount_eur);
-    if (!(amount_eur > 0 && isFinite(amount_eur))) return "amount_eur must be a number > 0";
   }
 
   return {
@@ -72,7 +66,6 @@ export function checkTxn(b: Record<string, unknown>, asset: Asset): TxnInput | s
     note: typeof b.note === "string" && b.note.trim() ? b.note.trim() : null,
     paid_amount,
     paid_currency,
-    amount_eur,
   };
 }
 

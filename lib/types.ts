@@ -57,13 +57,10 @@ export interface Txn {
   price: number; // per unit, in asset currency
   fees: number; // in asset currency
   note: string | null;
-  // What was actually paid (buy) / received (sell), in the currency the user
-  // entered — display metadata only, never used in portfolio math.
+  // What was actually paid (buy, incl. fees) / received (sell, net of fees),
+  // in EUR/USD/GBP; when set, EUR cost/proceeds = this at the txn-date rate.
   paid_amount: number | null;
   paid_currency: string | null;
-  // Exact EUR paid (buy, incl. fees) / received (sell, net of fees) for a
-  // non-EUR asset; when set, the portfolio math uses it instead of FX.
-  amount_eur?: number | null;
 }
 
 export interface ReturnStats {
