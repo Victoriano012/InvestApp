@@ -42,6 +42,8 @@ export interface BasketComponent {
   asset_id: number;
   symbol: string;
   name: string;
+  since?: string; // buys from this date on include it; absent = from the beginning
+  until?: string; // removed: buys from this date on skip it
 }
 
 export type TxnType = "buy" | "sell";
@@ -63,9 +65,10 @@ export interface Txn {
 
 export interface ReturnStats {
   days: number;
-  totalPct: number; // e.g. 0.12 = +12%
-  annualPct: number;
-  monthlyPct: number;
+  // null when there is no current price
+  totalPct: number | null; // e.g. 0.12 = +12%
+  annualPct: number | null;
+  monthlyPct: number | null;
 }
 
 export interface LotStats {
@@ -77,7 +80,7 @@ export interface LotStats {
   priceEUR: number; // per unit at buy date
   costEUR: number; // quantity * priceEUR
   valueEUR: number; // remaining * current price EUR
-  gainEUR: number; // remaining * (current - entry) EUR
+  gainEUR: number | null; // remaining * (current - entry) EUR
   stats: ReturnStats; // price-based return since this buy, in EUR
 }
 
@@ -139,7 +142,7 @@ export interface ExplorerAsset {
     // equal-weight index approximation.
     unitValueEUR?: (number | null)[];
   }[];
-  txns: { id: number; type: TxnType; date: string; quantity: number; price: number }[];
+  txns: { id: number; type: TxnType; date: string; quantity: number; price: number; fees: number }[];
 }
 
 export interface ExplorerData {

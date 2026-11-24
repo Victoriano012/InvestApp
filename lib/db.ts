@@ -1,5 +1,6 @@
 import path from "node:path";
 import { decrypt, digest, encrypt } from "./crypto";
+import { todayISO } from "./format";
 import type { Asset, BasketComponent, Txn } from "./types";
 
 // Postgres: Neon over HTTP in production (DATABASE_URL), embedded PGlite for
@@ -186,14 +187,19 @@ export async function deleteAsset(uid: number, id: number): Promise<void> {
 
 // ---- basket components (via asset ownership, contents encrypted) ----
 
-type CompPayload = { symbol: string; name: string };
+type CompPayload = { symbol: string; name: string; since?: string; until?: string };
 type CompRow = { id: number; asset_id: number; enc: string };
 
 function rowToComp(uid: number, r: CompRow): BasketComponent {
   return { id: r.id, asset_id: r.asset_id, ...decrypt<CompPayload>(uid, r.enc) };
 }
 
-export async function listBasketComponents(uid: number, assetId: number): Promise<BasketComponent[]> {
+/** Current components; `withRemoved` adds removed ones (past lots still hold them). */
+export async function listBasketComponents(
+  uid: number,
+  assetId: number,
+  withRemoved = false
+): Promise<BasketComponent[]> {
   const rows = (await q(
     `SELECT c.id, c.asset_id, c.enc FROM basket_components c
      JOIN assets a ON a.id = c.asset_id
@@ -202,29 +208,45 @@ export async function listBasketComponents(uid: number, assetId: number): Promis
   )) as CompRow[];
   return rows
     .map((r) => rowToComp(uid, r))
+    .filter((c) => withRemoved || !c.until)
     .sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : x.id - y.id));
 }
 
+const hasTxns = async (assetId: number) =>
+  !!(await one("SELECT 1 FROM transactions WHERE asset_id = $1 LIMIT 1", [assetId]));
+
+/**
+ * A component joins buys from today on (`since`), unless the basket has no
+ * transactions yet: then it counts from the beginning, like rows without
+ * `since`. Re-adding a removed one restores its original `since`.
+ */
 export async function addBasketComponent(
   uid: number,
   assetId: number,
   symbol: string,
   name: string
 ): Promise<BasketComponent> {
+  const prev = (await listBasketComponents(uid, assetId, true)).find((c) => c.symbol === symbol);
+  const since = prev ? prev.since : (await hasTxns(assetId)) ? todayISO() : undefined;
   const r = await one<CompRow>(
     `INSERT INTO basket_components (asset_id, symbol_h, enc) VALUES ($1, $2, $3)
      ON CONFLICT (asset_id, symbol_h) DO UPDATE SET enc = EXCLUDED.enc
      RETURNING id, asset_id, enc`,
-    [assetId, digest(uid, symbol), encrypt(uid, { symbol, name })]
+    [assetId, digest(uid, symbol), encrypt(uid, { symbol, name, since })]
   );
   return rowToComp(uid, r!);
 }
 
+/** Skipped by buys from today on (`until`); past lots keep it. Deleted if nothing was bought yet. */
 export async function removeBasketComponent(uid: number, assetId: number, symbol: string): Promise<void> {
-  await q("DELETE FROM basket_components WHERE asset_id = $1 AND symbol_h = $2", [
-    assetId,
-    digest(uid, symbol),
-  ]);
+  const c = (await listBasketComponents(uid, assetId)).find((x) => x.symbol === symbol);
+  if (!c) return;
+  if (!(await hasTxns(assetId))) {
+    await q("DELETE FROM basket_components WHERE id = $1", [c.id]);
+    return;
+  }
+  const payload: CompPayload = { symbol: c.symbol, name: c.name, since: c.since, until: todayISO() };
+  await q("UPDATE basket_components SET enc = $1 WHERE id = $2", [encrypt(uid, payload), c.id]);
 }
 
 // ---- transactions (scoped through asset ownership, contents encrypted) ----

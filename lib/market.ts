@@ -193,18 +193,6 @@ function dayIn(timeZone: string | undefined): (d: Date) => string {
   return (d) => f.format(new Date(d));
 }
 
-/**
- * n when `ratio` is within 5% of an integer split n >= 2, 1/n for a reverse
- * split, else 1. Loose on purpose: matches a txn price against a close.
- */
-export function splitRatio(ratio: number): number {
-  if (!(ratio > 0) || !isFinite(ratio)) return 1;
-  const r = ratio >= 1 ? ratio : 1 / ratio;
-  const n = Math.round(r);
-  if (n < 2 || Math.abs(r / n - 1) > 0.05) return 1;
-  return ratio >= 1 ? n : 1 / n;
-}
-
 /** FX pairs, indices, futures and crypto pairs (BTC-EUR) never split. */
 const NEVER_SPLITS = /[=^]|-[A-Z]{3}$/;
 
@@ -218,7 +206,7 @@ const SPLITS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 
  * for 2 (AAPL's real -52% day in 2000 is 2.08), 5% below 10, 8% from 10 up
  * (a quote vs a days-old close: 60:1 plus a -5% move must still read 60). 1 if none.
  */
-function jumpSplit(ratio: number, date: string, splits: Split[], symbol: string): number {
+export function jumpSplit(ratio: number, date: string, splits: Split[], symbol: string): number {
   if (!(ratio > 0) || !isFinite(ratio)) return 1;
   for (const s of splits) {
     if (Math.abs(daysBetween(s.date, date)) <= 14 && Math.abs(Math.log(ratio / s.ratio)) < 0.1) return s.ratio;

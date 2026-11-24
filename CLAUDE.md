@@ -54,7 +54,9 @@ Postgres.
   that day's EUR closes; sells consume units FIFO. Per-buy stats are exact;
   the chart series is an equal-weight base-100 index (approximation
   documented in `lib/portfolio.ts`). Components editable via
-  `/api/assets/[id]/components`.
+  `/api/assets/[id]/components`; each carries encrypted `since`/`until`
+  dates (absent = always) so edits only affect buys from that day on —
+  removal is a soft `until`, past lots keep the component.
 - **Money-based entry**: the add-transaction form takes an amount + currency
   and derives quantity from that day's close via `/api/close`
   (`{price, currency, usdPerEur, unitValue}`); the DB stays canonical in

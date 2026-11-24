@@ -697,7 +697,8 @@ function lotTakes(a: ExplorerAsset) {
       l.left -= take;
       qty -= take;
       const arr = takes.get(l.txnId) ?? [];
-      arr.push({ sellId: s.id, date: s.date, qty: take, price: s.price });
+      // Net of the sell fee per unit, as realized P&L in lib/portfolio.ts.
+      arr.push({ sellId: s.id, date: s.date, qty: take, price: s.price - (s.fees || 0) / s.quantity });
       takes.set(l.txnId, arr);
     }
   }
@@ -819,8 +820,7 @@ function buildModel(data: ExplorerData, o: ModelOpts) {
       a.lots.forEach((lot) => {
         // The lot as a position of its own, so it goes through the same rebase
         // as the aggregate lines: held units fall with the sells FIFO-matched
-        // to it, which turn into realized gain at the sell price. (Sell fees
-        // aren't in the payload, so a sold lot reads slightly high.)
+        // to it, which turn into realized gain at the sell price net of fees.
         const tk = takes.get(lot.txnId) ?? [];
         const contributed = lot.quantity * lot.priceEUR;
         const valueEUR: (number | null)[] = [];

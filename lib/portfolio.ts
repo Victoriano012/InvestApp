@@ -4,7 +4,7 @@ import {
   FX_SYMBOL,
   getQuotes,
   historiesMap,
-  splitRatio,
+  jumpSplit,
 } from "./market";
 import { addDays, daysBetween, todayISO } from "./format";
 import { CATEGORIES } from "./types";
@@ -51,6 +51,14 @@ function returnStats(entry: number, current: number, fromDate: string, toDate: s
   const monthly = growth > 0 ? Math.pow(growth, 30.4375 / d) - 1 : -1;
   return { days, totalPct: total, annualPct: annual, monthlyPct: monthly };
 }
+
+/** Return stats when there is no current price: holding period only. */
+const unpriced = (fromDate: string, toDate: string): ReturnStats => ({
+  days: Math.max(daysBetween(fromDate, toDate), 0),
+  totalPct: null,
+  annualPct: null,
+  monthlyPct: null,
+});
 
 /** EUR value of 1 unit of `currency`, given USD-per-EUR rate. */
 function eurFactor(currency: string, usdPerEur: number | null): number | null {
@@ -104,9 +112,11 @@ function buildFx(from: string, to: string, hist: Hist, fallback: number | null =
  * Restate txns in the history's share basis. Stored quantity/price are in the
  * trade date's basis, but history is split-adjusted to today's, so a split
  * after the buy would value n× too many/few shares. Spot it by comparing the
- * txn price with that day's close; rescale keeping quantity × price unchanged.
+ * txn price with that day's close, by the history's own split rule (common
+ * ratios only, none for crypto/FX/indices), so a mistyped price stays as is;
+ * rescale keeping quantity × price unchanged.
  */
-function toHistoryBasis(txns: Txn[], closes: Map<string, number>): Txn[] {
+function toHistoryBasis(txns: Txn[], closes: Map<string, number>, symbol: string): Txn[] {
   return txns.map((t) => {
     let close: number | undefined;
     for (const [d, c] of closes) {
@@ -117,7 +127,7 @@ function toHistoryBasis(txns: Txn[], closes: Map<string, number>): Txn[] {
       }
       close = c;
     }
-    const n = close ? splitRatio(t.price / close) : 1;
+    const n = close ? jumpSplit(t.price / close, t.date, [], symbol) : 1;
     return n === 1 ? t : { ...t, quantity: t.quantity * n, price: t.price / n };
   });
 }
@@ -304,7 +314,8 @@ function componentPricesEUR(
 function computeBasketTimeline(
   txns: Txn[],
   axis: string[],
-  compPricesEUR: (number | null)[][]
+  compPricesEUR: (number | null)[][],
+  comps: BasketComponent[]
 ): BasketTimeline {
   const byDate = new Map<string, Txn[]>();
   for (const t of txns) {
@@ -335,7 +346,11 @@ function computeBasketTimeline(
             return null;
           });
           const avail: number[] = [];
-          for (let j = 0; j < n; j++) if (px[j] != null) avail.push(j);
+          // Only components in the basket on the buy date (added/removed later don't rewrite it).
+          for (let j = 0; j < n; j++) {
+            const { since, until } = comps[j];
+            if (px[j] != null && !(since && t.date < since) && !(until && t.date >= until)) avail.push(j);
+          }
           const compQty = new Array<number>(n).fill(0);
           for (const j of avail) compQty[j] = amount / avail.length / px[j]!;
           lots.push({ txnId: t.id, date: t.date, units: t.quantity, remaining: t.quantity, unitCostEUR, compQty, buyPx: px });
@@ -389,7 +404,7 @@ export async function basketUnitValueOn(
   assetId: number,
   date: string
 ): Promise<number | null> {
-  const comps = await listBasketComponents(uid, assetId);
+  const comps = await listBasketComponents(uid, assetId, true);
   const txns = (await listTxns(uid, assetId)).filter((t) => t.date <= date);
   if (!comps.length || !txns.length) return null;
   const from = txns[0].date;
@@ -402,7 +417,7 @@ export async function basketUnitValueOn(
   const axis = buildAxis(from, date);
   const fx = buildFx(from, date, hist);
   const prices = componentPricesEUR(comps, axis, fx, hist, curOf);
-  const tl = computeBasketTimeline(txns, axis, prices);
+  const tl = computeBasketTimeline(txns, axis, prices, comps);
   const last = axis.length - 1;
   return tl.units[last] > 0 ? tl.valueEUR[last] / tl.units[last] : null;
 }
@@ -422,7 +437,7 @@ function basketHolding(
 ): Holding {
   const axis = at.length ? buildAxis(at[0].date, today) : [];
   const prices = at.length ? componentPricesEUR(comps, axis, fx, hist, curOf) : [];
-  const tl = at.length ? computeBasketTimeline(at, axis, prices) : null;
+  const tl = at.length ? computeBasketTimeline(at, axis, prices, comps) : null;
 
   // Current EUR price per component: live quote, else last cached close.
   const priceNow = comps.map((c, j) => {
@@ -438,9 +453,11 @@ function basketHolding(
 
   const lots: LotStats[] = (tl?.lots ?? []).map((lot) => {
     let full = 0; // value now of the lot's original composition
+    let priced = true; // every held component has a current price
     lot.compQty.forEach((q, j) => {
       const p = priceNow[j];
       if (p != null) full += q * p;
+      else if (q > 0) priced = false;
     });
     const perUnit = lot.units > 0 ? full / lot.units : 0;
     const value = lot.units > 0 ? (lot.remaining / lot.units) * full : 0;
@@ -453,8 +470,8 @@ function basketHolding(
       priceEUR: lot.unitCostEUR,
       costEUR: lot.units * lot.unitCostEUR,
       valueEUR: value,
-      gainEUR: value - lot.remaining * lot.unitCostEUR,
-      stats: returnStats(lot.unitCostEUR, perUnit, lot.date, today),
+      gainEUR: priced ? value - lot.remaining * lot.unitCostEUR : null,
+      stats: priced ? returnStats(lot.unitCostEUR, perUnit, lot.date, today) : unpriced(lot.date, today),
     };
   });
 
@@ -491,7 +508,7 @@ function basketHolding(
 /** Basket components per basket asset id. */
 async function loadBaskets(uid: number, assets: Asset[]): Promise<Map<number, BasketComponent[]>> {
   const ids = assets.filter((a) => a.kind === "basket").map((a) => a.id);
-  const comps = await Promise.all(ids.map((id) => listBasketComponents(uid, id)));
+  const comps = await Promise.all(ids.map((id) => listBasketComponents(uid, id, true)));
   return new Map(ids.map((id, i) => [id, comps[i]]));
 }
 
@@ -532,7 +549,7 @@ export async function getPortfolio(uid: number, fresh = false): Promise<Portfoli
       holdings.push(h);
       continue;
     }
-    const at = toHistoryBasis(txns.filter((t) => t.asset_id === asset.id), histOf(hist, asset.symbol));
+    const at = toHistoryBasis(txns.filter((t) => t.asset_id === asset.id), histOf(hist, asset.symbol), asset.symbol);
     // Live quote, else the last cached close (never value a holding at 0 for a missing quote).
     const priceNative = quotes.get(asset.symbol)?.price ?? lastValue(histOf(hist, asset.symbol));
     const f = eurFactor(asset.currency, fxNow);
@@ -551,10 +568,7 @@ export async function getPortfolio(uid: number, fresh = false): Promise<Portfoli
 
     const lots: LotStats[] = (tl?.lots ?? []).map((lot) => {
       const entryEUR = lot.unitCostEUR;
-      const stats =
-        priceEUR != null
-          ? returnStats(entryEUR, priceEUR, lot.date, today)
-          : { days: daysBetween(lot.date, today), totalPct: 0, annualPct: 0, monthlyPct: 0 };
+      const stats = priceEUR != null ? returnStats(entryEUR, priceEUR, lot.date, today) : unpriced(lot.date, today);
       return {
         txnId: lot.txnId,
         date: lot.date,
@@ -564,7 +578,7 @@ export async function getPortfolio(uid: number, fresh = false): Promise<Portfoli
         priceEUR: entryEUR,
         costEUR: lot.quantity * entryEUR,
         valueEUR: priceEUR != null ? lot.remaining * priceEUR : 0,
-        gainEUR: priceEUR != null ? lot.remaining * (priceEUR - entryEUR) : 0,
+        gainEUR: priceEUR != null ? lot.remaining * (priceEUR - entryEUR) : null,
         stats,
       };
     });
@@ -643,8 +657,8 @@ export async function getExplorerData(uid: number, fresh = false): Promise<Explo
     if (asset.kind === "basket") {
       const comps = baskets.get(asset.id) ?? [];
       const prices = componentPricesEUR(comps, axis, fx, hist, curOf);
-      // Components with no data at all would hold the index at null forever.
-      const live = prices.filter((cp) => cp.some((p) => p != null));
+      // Current components only; ones with no data at all would hold the index at null forever.
+      const live = prices.filter((cp, j) => !comps[j].until && cp.some((p) => p != null));
       // Equal-weight index (base 100 at the first date all components trade).
       // Per-lot chart lines use this index, so they are equal-weight-at-index-
       // base rather than equal-weight-at-buy — close enough for plotting;
@@ -660,7 +674,7 @@ export async function getExplorerData(uid: number, fresh = false): Promise<Explo
         return (100 * s) / live.length;
       });
       const at = txns.filter((t) => t.asset_id === asset.id);
-      const tl = at.length ? computeBasketTimeline(at, axis, prices) : null;
+      const tl = at.length ? computeBasketTimeline(at, axis, prices, comps) : null;
       return {
         id: asset.id,
         symbol: asset.symbol,
@@ -699,11 +713,12 @@ export async function getExplorerData(uid: number, fresh = false): Promise<Explo
           date: t.date,
           quantity: t.quantity,
           price: t.price,
+          fees: t.fees || 0,
         })),
       };
     }
 
-    const at = toHistoryBasis(txns.filter((t) => t.asset_id === asset.id), histOf(hist, asset.symbol));
+    const at = toHistoryBasis(txns.filter((t) => t.asset_id === asset.id), histOf(hist, asset.symbol), asset.symbol);
     const nativeHistory = new Map(histOf(hist, asset.symbol));
     // A transaction can be dated on a weekend/holiday. Use its execution
     // price when no market close exists so the series and trade marker begin
@@ -753,6 +768,7 @@ export async function getExplorerData(uid: number, fresh = false): Promise<Explo
         date: t.date,
         quantity: t.quantity,
         price: t.price,
+        fees: t.fees || 0,
       })),
     };
   });
@@ -808,14 +824,15 @@ export async function getCapitalData(uid: number, fresh = false): Promise<Capita
     const invested = new Array<number>(axis.length).fill(0);
     const value = new Array<number>(axis.length).fill(0);
     if (asset.kind === "basket") {
-      const prices = componentPricesEUR(baskets.get(asset.id) ?? [], axis, fx, hist, curOf);
-      const tl = computeBasketTimeline(at, axis, prices);
+      const comps = baskets.get(asset.id) ?? [];
+      const prices = componentPricesEUR(comps, axis, fx, hist, curOf);
+      const tl = computeBasketTimeline(at, axis, prices, comps);
       for (let i = 0; i < axis.length; i++) {
         invested[i] = tl.costEUR[i];
         value[i] = tl.valueEUR[i];
       }
     } else {
-      const tl = computeTimeline(toHistoryBasis(at, histOf(hist, asset.symbol)), axis, asset.currency, fx);
+      const tl = computeTimeline(toHistoryBasis(at, histOf(hist, asset.symbol), asset.symbol), axis, asset.currency, fx);
       const priceNative = ffill(axis, histOf(hist, asset.symbol));
       for (let i = 0; i < axis.length; i++) {
         invested[i] = tl.costEUR[i];
