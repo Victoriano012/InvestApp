@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { currentUserId } from "@/auth";
 import { getAsset, getHistory } from "@/lib/db";
-import { ensureAllHistory, FX_SYMBOL, GBP_FX_SYMBOL } from "@/lib/market";
+import { ensureAllHistory, FX_SYMBOL, GBP_FX_SYMBOL, splitAdjusted } from "@/lib/market";
 import { basketUnitValueOn } from "@/lib/portfolio";
 import { addDays } from "@/lib/format";
 
@@ -10,7 +10,7 @@ export const maxDuration = 60;
 
 /** Last known close of `symbol` on or before `date` (from the cached history). */
 async function closeOnOrBefore(symbol: string, date: string): Promise<number | null> {
-  const rows = await getHistory(symbol);
+  const rows = splitAdjusted(await getHistory(symbol));
   for (let i = rows.length - 1; i >= 0; i--) {
     if (rows[i].date <= date) return rows[i].close;
   }

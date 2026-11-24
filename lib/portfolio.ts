@@ -4,6 +4,7 @@ import {
   FX_SYMBOL,
   getQuotes,
   historiesMap,
+  splitRatio,
 } from "./market";
 import { addDays, daysBetween, todayISO } from "./format";
 import { CATEGORIES } from "./types";
@@ -87,6 +88,24 @@ function buildFx(from: string, to: string, hist: Hist): FxLookup {
       return usdPerEur[i];
     },
   };
+}
+
+/**
+ * Restate txns in the history's share basis. Stored quantity/price are in the
+ * trade date's basis, but history is split-adjusted to today's, so a split
+ * after the buy would value n× too many/few shares. Spot it by comparing the
+ * txn price with that day's close; rescale keeping quantity × price unchanged.
+ */
+function toHistoryBasis(txns: Txn[], closes: Map<string, number>): Txn[] {
+  return txns.map((t) => {
+    let close: number | undefined;
+    for (const [d, c] of closes) {
+      if (d > t.date) break;
+      close = c;
+    }
+    const n = close ? splitRatio(t.price / close) : 1;
+    return n === 1 ? t : { ...t, quantity: t.quantity * n, price: t.price / n };
+  });
 }
 
 // ---------- FIFO timeline ----------
@@ -434,10 +453,10 @@ export async function getPortfolio(uid: number, fresh = false): Promise<Portfoli
   const symbols = assets.filter((a) => a.kind !== "basket").map((a) => a.symbol);
   // FX + component closes (needed back to the earliest basket buy, to split it).
   const [histSkipped, { quotes, stale, skipped }] = await Promise.all([
-    ensureAllHistory(compSymbols, minDate, cacheOnly),
+    ensureAllHistory([...symbols, ...compSymbols], minDate, cacheOnly),
     getQuotes([...symbols, ...compSymbols, FX_SYMBOL], cacheOnly),
   ]);
-  const hist = await historiesMap([...compSymbols, FX_SYMBOL]);
+  const hist = await historiesMap([...symbols, ...compSymbols, FX_SYMBOL]);
   // Component currencies straight from the fresh quotes (fall back to USD).
   const curOf = new Map(compSymbols.map((s) => [s, quotes.get(s)?.currency ?? "USD"]));
 
@@ -450,8 +469,8 @@ export async function getPortfolio(uid: number, fresh = false): Promise<Portfoli
   let totalRealized = 0;
 
   for (const asset of assets) {
-    const at = txns.filter((t) => t.asset_id === asset.id);
     if (asset.kind === "basket") {
+      const at = txns.filter((t) => t.asset_id === asset.id);
       const h = basketHolding(asset, baskets.get(asset.id) ?? [], at, today, fx, fxNow, quotes, hist, curOf);
       totalValue += h.valueEUR;
       totalCost += h.costEUR;
@@ -459,6 +478,7 @@ export async function getPortfolio(uid: number, fresh = false): Promise<Portfoli
       holdings.push(h);
       continue;
     }
+    const at = toHistoryBasis(txns.filter((t) => t.asset_id === asset.id), histOf(hist, asset.symbol));
     const quote = quotes.get(asset.symbol);
     const priceNative = quote?.price ?? null;
     const f = eurFactor(asset.currency, fxNow);
@@ -626,7 +646,7 @@ export async function getExplorerData(uid: number, fresh = false): Promise<Explo
       };
     }
 
-    const at = txns.filter((t) => t.asset_id === asset.id);
+    const at = toHistoryBasis(txns.filter((t) => t.asset_id === asset.id), histOf(hist, asset.symbol));
     const nativeHistory = new Map(histOf(hist, asset.symbol));
     // A transaction can be dated on a weekend/holiday. Use its execution
     // price when no market close exists so the series and trade marker begin
@@ -737,7 +757,7 @@ export async function getCapitalData(uid: number, fresh = false): Promise<Capita
         value[i] = tl.valueEUR[i];
       }
     } else {
-      const tl = computeTimeline(at, axis, asset.currency, fx);
+      const tl = computeTimeline(toHistoryBasis(at, histOf(hist, asset.symbol)), axis, asset.currency, fx);
       const priceNative = ffill(axis, histOf(hist, asset.symbol));
       for (let i = 0; i < axis.length; i++) {
         invested[i] = tl.costEUR[i];

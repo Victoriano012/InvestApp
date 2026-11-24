@@ -130,11 +130,39 @@ export async function ensureHistory(symbol: string, fromDate: string): Promise<v
   await ensureAllHistory([symbol], fromDate);
 }
 
-/** Cached daily closes as symbol -> (date -> close) maps (after ensureAllHistory). */
+/**
+ * n when `ratio` is within 5% of an integer split n >= 2, 1/n for a reverse
+ * split, else 1. (A real one-day move of -50% or worse would be misread as a
+ * split; accepted, as Yahoo missing splits is far more common.)
+ */
+export function splitRatio(ratio: number): number {
+  if (!(ratio > 0)) return 1;
+  const r = ratio >= 1 ? ratio : 1 / ratio;
+  const n = Math.round(r);
+  if (n < 2 || Math.abs(r / n - 1) > 0.05) return 1;
+  return ratio >= 1 ? n : 1 / n;
+}
+
+/**
+ * Yahoo doesn't always record splits (6AQQ.DE's 60:1 on 2026-11-16 came
+ * through as raw closes 288.75 -> 4.78). Restate closes before any day-over-day
+ * split-sized jump in the latest share basis.
+ */
+export function splitAdjusted<T extends { close: number }>(rows: T[]): T[] {
+  const out = rows.slice();
+  let f = 1;
+  for (let i = out.length - 1; i > 0; i--) {
+    f /= splitRatio(rows[i - 1].close / rows[i].close);
+    if (f !== 1) out[i - 1] = { ...rows[i - 1], close: rows[i - 1].close * f };
+  }
+  return out;
+}
+
+/** Cached daily closes as symbol -> (date -> close) maps (after ensureAllHistory), split-adjusted. */
 export async function historiesMap(symbols: string[]): Promise<Map<string, Map<string, number>>> {
   const hist = await getHistories([...new Set(symbols)]);
   const out = new Map<string, Map<string, number>>();
-  for (const [s, rows] of hist) out.set(s, new Map(rows.map((r) => [r.date, r.close])));
+  for (const [s, rows] of hist) out.set(s, new Map(splitAdjusted(rows).map((r) => [r.date, r.close])));
   return out;
 }
 
