@@ -326,6 +326,19 @@ export async function getHistories(
   return out;
 }
 
+/** Newest cached close per symbol. */
+export async function getLastCloses(
+  symbols: string[]
+): Promise<Map<string, { date: string; close: number }>> {
+  if (!symbols.length) return new Map();
+  const rows = (await q(
+    `SELECT DISTINCT ON (symbol) symbol, date, close FROM price_history
+     WHERE symbol = ANY($1) AND close > 0 ORDER BY symbol, date DESC`,
+    [symbols]
+  )) as unknown as { symbol: string; date: string; close: number }[];
+  return new Map(rows.map((r) => [r.symbol, { date: r.date, close: r.close }]));
+}
+
 export async function upsertHistory(
   symbol: string,
   rows: { date: string; close: number }[]
