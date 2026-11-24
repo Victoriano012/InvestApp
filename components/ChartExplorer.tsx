@@ -19,7 +19,7 @@ import { useDark, useJson } from "./hooks";
 import RangeControl, { rangeWindow, useDragZoom, type RangeSel } from "./RangeControl";
 import { axisDateFmt, daysBetween, fmtCompact, fmtDate, fmtEUR, fmtMoney, fmtPct, todayISO } from "@/lib/format";
 import { categoryColor, chrome, dashFor } from "@/lib/palette";
-import { CATEGORIES, type Category, type ExplorerData } from "@/lib/types";
+import { CATEGORIES, type Category, type ExplorerAsset, type ExplorerData } from "@/lib/types";
 
 type Metric = "value" | "gain_abs" | "gain_pct";
 type Grouping = "category" | "asset";
@@ -678,11 +678,40 @@ interface TradeMark {
   y: number | null;
 }
 
+// Replay an asset's sells over its lots FIFO (as lib/portfolio.ts does; any
+// oversell is ignored): per buy txnId, the sells that consumed it, in order.
+function lotTakes(a: ExplorerAsset) {
+  const takes = new Map<number, { sellId: number; date: string; qty: number; price: number }[]>();
+  const rem = [...a.lots]
+    .sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : x.txnId - y.txnId))
+    .map((l) => ({ txnId: l.txnId, date: l.date, left: l.quantity }));
+  const sells = a.txns
+    .filter((t) => t.type === "sell")
+    .sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : x.id - y.id));
+  for (const s of sells) {
+    let qty = s.quantity;
+    for (const l of rem) {
+      if (qty <= 0) break;
+      if (l.left <= 0 || l.date > s.date) continue;
+      const take = Math.min(l.left, qty);
+      l.left -= take;
+      qty -= take;
+      const arr = takes.get(l.txnId) ?? [];
+      arr.push({ sellId: s.id, date: s.date, qty: take, price: s.price });
+      takes.set(l.txnId, arr);
+    }
+  }
+  return takes;
+}
+
 function buildModel(data: ExplorerData, o: ModelOpts) {
   let i0 = data.dates.findIndex((d) => d >= o.from);
   if (i0 < 0) i0 = 0;
   let i1 = data.dates.length - 1;
   while (i1 > i0 && data.dates[i1] > o.to) i1--;
+  // A one-day window (YTD on Jan 1, a same-day custom range) would plot a
+  // lone point, which a line chart draws as nothing: show the day before too.
+  if (i1 === i0 && i0 > 0) i0--;
   const dates = data.dates.slice(i0, i1 + 1);
 
   const chosen = data.assets.filter((a) => o.sel.includes(a.id));
@@ -699,14 +728,15 @@ function buildModel(data: ExplorerData, o: ModelOpts) {
     firstTxn: string | null;
   }
   const metricVals = (src: AggSrc): (number | null)[] => {
-    if (o.metric === "value") return dates.map((_, i) => src.valueEUR[i0 + i]);
+    // No line before the first transaction — a flat 0 there is noise.
+    if (o.metric === "value")
+      return dates.map((d, i) => (src.firstTxn == null || d < src.firstTxn ? null : src.valueEUR[i0 + i]));
     const gainAt = (j: number): number | null => {
       const v = src.valueEUR[j];
       const c = src.costEUR[j];
       return v != null && c != null ? v - c + (src.realizedEUR[j] ?? 0) : null;
     };
     if (o.metric === "gain_abs") {
-      // No line before the first transaction — a flat 0 there is noise.
       // Count gains from the window start: rebase by what was accumulated before it.
       let base = 0;
       for (let j = i0 - 1; j >= 0; j--) {
@@ -785,31 +815,47 @@ function buildModel(data: ExplorerData, o: ModelOpts) {
   } else for (const a of chosen) {
     const color = categoryColor(a.category, o.dark);
     if (o.usePerLot) {
+      const takes = lotTakes(a);
       a.lots.forEach((lot) => {
-        const unitAt = (j: number): number | null => {
-          if (data.dates[j] < lot.date) return null;
-          // Baskets ship the lot's exact per-unit value series; singles use the price.
-          return lot.unitValueEUR ? lot.unitValueEUR[j] : a.priceEUR[j];
-        };
-        // Gains count from the window start, not from the buy: in € subtract
-        // what the lot had already gained, in % divide by what one unit was
-        // worth entering the window (same rebase as the aggregate lines).
-        // A lot bought inside the window keeps its own entry price as the
-        // reference, so its fee drag still shows.
-        let baseAbs = 0;
-        let refEUR = lot.priceEUR;
-        for (let j = i0 - 1; j >= 0; j--) {
-          const p = unitAt(j);
-          if (p != null) {
-            baseAbs = (p - lot.priceEUR) * lot.quantity;
-            refEUR = p;
-            break;
+        // The lot as a position of its own, so it goes through the same rebase
+        // as the aggregate lines: held units fall with the sells FIFO-matched
+        // to it, which turn into realized gain at the sell price. (Sell fees
+        // aren't in the payload, so a sold lot reads slightly high.)
+        const tk = takes.get(lot.txnId) ?? [];
+        const contributed = lot.quantity * lot.priceEUR;
+        const valueEUR: (number | null)[] = [];
+        const costEUR: (number | null)[] = [];
+        const realizedEUR: (number | null)[] = [];
+        let held = lot.quantity;
+        let realized = 0;
+        let k = 0;
+        data.dates.forEach((d, j) => {
+          if (d < lot.date) {
+            valueEUR.push(null);
+            costEUR.push(null);
+            realizedEUR.push(null);
+            return;
           }
-        }
-        const vals = dates.map((_, i) => {
-          const p = unitAt(i0 + i);
-          if (p == null) return null;
-          return o.metric === "gain_abs" ? (p - lot.priceEUR) * lot.quantity - baseAbs : p / refEUR - 1;
+          for (; k < tk.length && tk[k].date <= d; k++) {
+            // EUR per native unit that day (1 for EUR assets and baskets).
+            const pn = a.priceNative[j];
+            const pe = a.priceEUR[j];
+            const fx = pn && pe != null ? pe / pn : 1;
+            held -= tk[k].qty;
+            realized += tk[k].qty * (tk[k].price * fx - lot.priceEUR);
+          }
+          // Baskets ship the lot's exact per-unit value series; singles use the price.
+          const p = lot.unitValueEUR ? lot.unitValueEUR[j] : a.priceEUR[j];
+          valueEUR.push(p != null ? held * p : null);
+          costEUR.push(held * lot.priceEUR);
+          realizedEUR.push(realized);
+        });
+        const vals = metricVals({
+          valueEUR,
+          costEUR,
+          contributedEUR: data.dates.map((d) => (d < lot.date ? 0 : contributed)),
+          realizedEUR,
+          firstTxn: lot.date,
         });
         series.push({
           key: `a${a.id}l${lot.txnId}`,
@@ -867,23 +913,8 @@ function buildModel(data: ExplorerData, o: ModelOpts) {
     let sellLot: Map<number, number> | null = null; // sell txnId → buy txnId of the first lot it consumed
     if (o.usePerLot) {
       sellLot = new Map();
-      const rem = [...a.lots]
-        .sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : x.txnId - y.txnId))
-        .map((l) => ({ txnId: l.txnId, date: l.date, left: l.quantity }));
-      const sells = a.txns
-        .filter((t) => t.type === "sell")
-        .sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : x.id - y.id));
-      for (const sTxn of sells) {
-        let qty = sTxn.quantity;
-        for (const l of rem) {
-          if (l.left <= 0 || l.date > sTxn.date) continue;
-          if (!sellLot.has(sTxn.id)) sellLot.set(sTxn.id, l.txnId);
-          const take = Math.min(l.left, qty);
-          l.left -= take;
-          qty -= take;
-          if (qty <= 0) break;
-        }
-      }
+      // Lots are consumed in FIFO order, so the first lot recorded per sell is its first.
+      for (const [lotId, tk] of lotTakes(a)) for (const t of tk) if (!sellLot.has(t.sellId)) sellLot.set(t.sellId, lotId);
     }
     for (const t of a.txns) {
       if (t.date < (outDates[0] ?? "9999")) continue;

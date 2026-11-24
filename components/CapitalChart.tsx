@@ -140,6 +140,7 @@ export default function CapitalChart() {
     if (i0 < 0) i0 = 0;
     let i1 = data.dates.length - 1;
     while (i1 > i0 && data.dates[i1] > win.to) i1--;
+    if (i1 === i0 && i0 > 0) i0--; // a lone day draws nothing — show the day before too
 
     const txnDateSet = new Set(catTxnDates.map((t) => t.date));
     let rows = data.dates.slice(i0, i1 + 1).map((d, i) => {
